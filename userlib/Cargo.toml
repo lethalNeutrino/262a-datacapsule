@@ -1,0 +1,11 @@
+[package]
+name = "datacapsule-userlib"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "datacapsule_userlib"   # The name of the target.
+path = "lib.rs"    # The source file of the target.
+
+[dependencies]
+anyhow = "1.0.100"
