@@ -7,19 +7,16 @@ edition = "2024"
 members = [
     "capsulelib",
     "server",
-    "userlib",
+    "client", "examples/basic",
 ]
 
 [dependencies]
 anyhow = "1.0.100"
 crypto = { version = "0.5.1", features = ["signature"] }
 fjall = "2.11.2"
+sha2 = "0.10.9"
 tokio = { version = "1.48.0", features = ["full"] }
 
 [[bin]]
 name = "datacapsule_server"
 path = "server/main.rs"
-
-[lib]
-name = "datacapsule_userlib"   # The name of the target.
-path = "userlib/lib.rs"    # The source file of the target.
