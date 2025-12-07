@@ -338,10 +338,7 @@ name = "datacapsule-userlib"
 version = "0.1.0"
 dependencies = [
  "anyhow",
-<<<<<<< Updated upstream
  "datacapsule-capsulelib",
-=======
->>>>>>> Stashed changes
  "futures",
  "r2r",
 ]
