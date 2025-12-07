@@ -21,17 +21,14 @@ fn main() -> anyhow::Result<()> {
     let mut capsule = Capsule::create(data_path, metadata, signing_key, encryption_key)?;
     info!("Capsule created successfully");
 
-    let data = "Hello, world!";
-    let header_hash = capsule.append(vec![], data.as_bytes().to_vec())?;
-    info!(
-        "Header Hash: {}",
-        header_hash
-            .iter()
-            .map(|c| format!("{:02x}", c))
-            .collect::<String>()
-    );
+    let data = vec!["Hello", "World!"];
+    let mut header_hashes: Vec<Vec<u8>> = Vec::new();
 
-    let record = capsule.read(header_hash)?;
-    info!("Read data (decrypted): {:?}", str::from_utf8(&record.body)?);
+    for _ in 0..10000 {
+        header_hashes.push(capsule.append(vec![], data[0].as_bytes().to_vec())?);
+    }
+
+    let record = capsule.peek()?;
+    info!("Read data (decrypted): {}", str::from_utf8(&record.body)?);
     Ok(())
 }

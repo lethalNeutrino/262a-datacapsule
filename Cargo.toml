@@ -7,7 +7,7 @@ edition = "2024"
 members = [
     "capsulelib",
     "server",
-    "client", "examples/basic",
+    "client", "examples/basic", "examples/test"
 ]
 
 [dependencies]

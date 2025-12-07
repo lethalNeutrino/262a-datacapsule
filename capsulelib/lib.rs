@@ -1,8 +1,8 @@
 use aes::cipher::{KeyIvInit, StreamCipher, StreamCipherSeek};
 use ed25519_dalek::SigningKey;
 use ed25519_dalek::{Signature, Signer, Verifier};
-use fjall::PartitionCreateOptions;
 use fjall::{Config, PartitionHandle};
+use fjall::{PartitionCreateOptions, PersistMode};
 use log::debug;
 use memoize::memoize;
 use serde::{Deserialize, Serialize};
@@ -106,6 +106,7 @@ where
     last_seqno: usize,
     last_pointer: HashPointer,
     store_path: P,
+    keyspace: Option<PartitionHandle>,
 }
 
 impl<P> Capsule<P>
@@ -131,6 +132,7 @@ where
         }
 
         let keyspace = Config::new(&kv_store_path).open()?;
+        keyspace.persist(PersistMode::SyncAll)?;
 
         // Create a partition of the keyspace for a DataCapsule
         let gdp_name: &str = &metadata.hash_string();
@@ -184,6 +186,7 @@ where
             sign_key: Some(sign_key),
             symmetric_key,
             last_pointer: (0, metadata_header.hash()),
+            keyspace: Some(items),
             ..Default::default()
         })
     }
@@ -277,9 +280,10 @@ where
             body: data,
         };
 
-        let keyspace = Config::new(&self.store_path).open()?;
-        let items =
-            keyspace.open_partition(self.gdp_name().as_str(), PartitionCreateOptions::default())?;
+        // let keyspace = Config::new(&self.store_path).open()?;
+        // let items =
+        //     keyspace.open_partition(self.gdp_name().as_str(), PartitionCreateOptions::default())?;
+        let items = self.keyspace.as_ref().unwrap();
 
         items.insert(&header_hash, serde_json::to_vec(&record)?)?;
 
@@ -321,8 +325,10 @@ where
             .concat()
             .try_into()
             .unwrap();
+
         debug!("Decryption Key: {:?}", self.symmetric_key);
         debug!("Decryption IV: {:?}", iv);
+
         let mut cipher = Aes128Ctr64LE::new(self.symmetric_key.as_slice().into(), &iv.into());
         cipher.apply_keystream(&mut record.body);
 
@@ -335,6 +341,11 @@ where
                 .map(|b| format!("{:02x}", b))
                 .collect::<String>()
         );
+
         Ok(record)
+    }
+
+    pub fn peek(&self) -> Result<Record> {
+        self.read(self.last_pointer.1.clone())
     }
 }
