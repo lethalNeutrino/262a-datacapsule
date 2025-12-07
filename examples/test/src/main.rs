@@ -24,7 +24,7 @@ fn main() -> anyhow::Result<()> {
     let data = vec!["Hello", "World!"];
     let mut header_hashes: Vec<Vec<u8>> = Vec::new();
 
-    for _ in 0..10000 {
+    for _ in 0..100000 {
         header_hashes.push(capsule.append(vec![], data[0].as_bytes().to_vec())?);
     }
 

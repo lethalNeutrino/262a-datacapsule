@@ -1,0 +1,8 @@
+[package]
+name = "networking_basic"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+futures = "0.3.31"
+r2r = "0.9.5"
