@@ -9,7 +9,8 @@ members = [
     "server",
     "client",
     "examples/basic",
-    "examples/test"
+    "examples/test",
+    "examples/networking_basic"
 ]
 
 [dependencies]

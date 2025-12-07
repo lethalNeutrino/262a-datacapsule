@@ -338,7 +338,10 @@ name = "datacapsule-userlib"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+<<<<<<< Updated upstream
  "datacapsule-capsulelib",
+=======
+>>>>>>> Stashed changes
  "futures",
  "r2r",
 ]
@@ -859,6 +862,14 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "networking_basic"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "r2r",
 ]
 
 [[package]]

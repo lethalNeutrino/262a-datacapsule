@@ -130,12 +130,19 @@ where
             bail!("metadata must contain 'verify_key'");
         }
 
-        let keyspace = Config::new(&kv_store_path).open()?;
+        let keyspace = Config::new(&kv_store_path)
+            .max_write_buffer_size(128 * 1024 * 1024)
+            .open()?;
+        // keyspace.set_max_memtable_size(32 * 1_024 * 1_024);
+        // Config::new().
         keyspace.persist(PersistMode::SyncAll)?;
 
         // Create a partition of the keyspace for a DataCapsule
         let gdp_name: &str = &metadata.hash_string();
-        let items = keyspace.open_partition(gdp_name, PartitionCreateOptions::default())?;
+        let items = keyspace.open_partition(
+            gdp_name,
+            PartitionCreateOptions::default().max_memtable_size(64 * 1024 * 1024),
+        )?;
 
         // Create Header
         let metadata_header = RecordHeader {
