@@ -338,6 +338,9 @@ name = "datacapsule-userlib"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "datacapsule-capsulelib",
+ "futures",
+ "r2r",
 ]
 
 [[package]]

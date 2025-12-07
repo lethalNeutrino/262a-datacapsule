@@ -1,49 +1,36 @@
 use anyhow::Result;
+use capsulelib::Metadata;
+use futures::{Stream, executor::LocalPool, future, stream::StreamExt, task::LocalSpawnExt};
+use r2r::{Publisher, QosProfile, WrappedTypesupport};
 use std::collections::HashMap;
 
-#[derive(Default)]
-struct User<'a> {
-    name: String,
-    sign_key: &'a [u8],
-    verify_key: &'a [u8],
-    symmetric_key: &'a [u8],
-    db_filepath: String,
+struct Connection<S, P>
+where
+    S: WrappedTypesupport + 'static,
+    P: WrappedTypesupport + 'static,
+{
+    subscriber: Box<dyn Stream<Item = S> + Unpin>,
+    publisher: Publisher<P>,
 }
 
-impl User<'_> {
-    pub fn new(
-        name: String,
-        sign_key: &[u8],
-        verify_key: &[u8],
-        symmetric_key: &[u8],
-        db_filepath: String,
-    ) -> Self {
-        User::default()
-        // User {
-        //     name,
-        //     sign_key,
-        //     verify_key,
-        //     symmetric_key,
-        //     db_filepath,
-        // }
+impl<S, P> Connection<S, P>
+where
+    S: WrappedTypesupport + 'static,
+    P: WrappedTypesupport + 'static,
+{
+    /// Connects to the server
+    pub fn new() -> Result<Self> {
+        let ctx = r2r::Context::create()?;
+        let mut node = r2r::Node::create(ctx, "node", "namespace")?;
+        let subscriber = node.subscribe::<S>("/chatter_client", QosProfile::default())?;
+        let publisher = node.create_publisher::<P>("/chatter_server", QosProfile::default())?;
+        Ok(Connection {
+            subscriber: Box::new(subscriber),
+            publisher,
+        })
     }
-}
 
-pub fn create() -> Result<()> {
-    Ok(())
-}
-
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+    pub fn create(self, metadata: Metadata) -> Result<()> {
+        Ok(())
     }
 }

@@ -16,7 +16,7 @@ use anyhow::{Result, bail};
 struct MissingMetadataKey;
 
 pub type HashPointer = (usize, Vec<u8>);
-type Metadata = BTreeMap<String, Vec<u8>>;
+pub type Metadata = BTreeMap<String, Vec<u8>>;
 
 trait SHA256Hashable {
     fn hash(&self) -> Vec<u8>;

@@ -8,4 +8,7 @@ name = "datacapsule_userlib"   # The name of the target.
 path = "lib.rs"    # The source file of the target.
 
 [dependencies]
+capsulelib = { package = "datacapsule-capsulelib", path = "../capsulelib" }
 anyhow = "1.0.100"
+futures = "0.3.31"
+r2r = "0.9.5"
