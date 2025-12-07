@@ -3,9 +3,6 @@ name = "datacapsule-server"
 version = "0.1.0"
 edition = "2024"
 
-[[bin]]
-name = "datacapsule_server"
-path = "main.rs"
-
 [dependencies]
-tokio = { version = "1.48.0", features = ["full"] }
+futures = "0.3.31"
+r2r = "0.9.5"
