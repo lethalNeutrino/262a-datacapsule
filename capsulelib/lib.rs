@@ -1,10 +1,9 @@
-use aes::cipher::{KeyIvInit, StreamCipher, StreamCipherSeek};
+use aes::cipher::{KeyIvInit, StreamCipher};
 use ed25519_dalek::SigningKey;
-use ed25519_dalek::{Signature, Signer, Verifier};
+use ed25519_dalek::{Signature, Signer};
 use fjall::{Config, PartitionHandle};
 use fjall::{PartitionCreateOptions, PersistMode};
 use log::debug;
-use memoize::memoize;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::Read;
@@ -12,7 +11,7 @@ use std::{collections::BTreeMap, path::Path};
 
 type Aes128Ctr64LE = ctr::Ctr64LE<aes::Aes128>;
 
-use anyhow::{Error, Result, bail};
+use anyhow::{Result, bail};
 
 struct MissingMetadataKey;
 
@@ -136,7 +135,7 @@ where
 
         // Create a partition of the keyspace for a DataCapsule
         let gdp_name: &str = &metadata.hash_string();
-        let items = keyspace.open_partition(&gdp_name, PartitionCreateOptions::default())?;
+        let items = keyspace.open_partition(gdp_name, PartitionCreateOptions::default())?;
 
         // Create Header
         let metadata_header = RecordHeader {
@@ -235,7 +234,7 @@ where
             .sign_key
             .as_ref()
             .expect("append must be called by a writer")
-            .sign(&serde_json::to_vec(&heartbeat_data)?.as_ref());
+            .sign(serde_json::to_vec(&heartbeat_data)?.as_ref());
 
         let heartbeat = RecordHeartbeat {
             data: heartbeat_data,
@@ -251,7 +250,7 @@ where
 
         // Encrypt Data
         // JONAH LET US KNOW IF THIS IS TREAM
-        let iv: [u8; 16] = [(self.last_seqno + 1).to_le_bytes(), [0x0 as u8; 8]]
+        let iv: [u8; 16] = [(self.last_seqno + 1).to_le_bytes(), [0x0_u8; 8]]
             .concat()
             .try_into()
             .unwrap();
@@ -276,7 +275,7 @@ where
 
         let record = Record {
             header: header.clone(),
-            heartbeat: heartbeat,
+            heartbeat,
             body: data,
         };
 
@@ -301,13 +300,12 @@ where
         let record_bytes = items
             .get(&header_hash)
             .unwrap()
-            .expect(
-                format!(
+            .unwrap_or_else(|| {
+                panic!(
                     "Unable to find corresponding record for hash {:?}",
                     header_hash
                 )
-                .as_str(),
-            )
+            })
             .to_vec();
 
         let mut record: Record = serde_json::from_slice(&record_bytes)?;
@@ -321,7 +319,7 @@ where
                 .collect::<String>()
         );
 
-        let iv: [u8; 16] = [record.header.seqno.to_le_bytes(), [0x0 as u8; 8]]
+        let iv: [u8; 16] = [record.header.seqno.to_le_bytes(), [0x0_u8; 8]]
             .concat()
             .try_into()
             .unwrap();
