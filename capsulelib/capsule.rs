@@ -115,8 +115,58 @@ impl Capsule {
         self.metadata.hash_string()
     }
 
+    pub fn open<P: AsRef<Path>>(
+        kv_store_path: P,
+        metadata: Metadata,
+        symmetric_key: Vec<u8>,
+    ) -> Result<Self> {
+        // Implement the logic to open a capsule from storage
+        // This could involve reading metadata, keys, and other necessary data
+        // For now, we'll just return a default capsule
+        if !metadata.0.contains_key(&String::from("verify_key")) {
+            bail!("metadata must contain 'verify_key'");
+        }
+
+        let keyspace = Config::new(&kv_store_path)
+            .max_write_buffer_size(128 * 1024 * 1024)
+            .open()?;
+        keyspace.persist(PersistMode::SyncAll)?;
+
+        // Create a partition of the keyspace for a DataCapsule
+        let gdp_name: &str = &metadata.hash_string();
+        let items = keyspace.open_partition(
+            gdp_name,
+            PartitionCreateOptions::default().max_memtable_size(64 * 1024 * 1024),
+        )?;
+
+        // Create a separate partition for heartbeats for this capsule. Name it
+        // by appending a suffix to the capsule name to keep it unique.
+        let heartbeat_partition_name = format!("{}-heartbeats", gdp_name);
+        let heartbeat_items = keyspace.open_partition(
+            heartbeat_partition_name.as_str(),
+            PartitionCreateOptions::default().max_memtable_size(32 * 1024 * 1024),
+        )?;
+
+        // Create a separate partition for seqno->header mappings
+        let seqno_partition_name = format!("{}-seqnos", gdp_name);
+        let seqno_items = keyspace.open_partition(
+            seqno_partition_name.as_str(),
+            PartitionCreateOptions::default().max_memtable_size(16 * 1024 * 1024),
+        )?;
+
+        Ok(Capsule {
+            symmetric_key,
+            keyspace: Some(items),
+            heartbeat_keyspace: Some(heartbeat_items),
+            seqno_keyspace: Some(seqno_items),
+            last_seqno: 0,
+            ..Default::default()
+        })
+    }
+
+    // Server-side function to place a capsule into a specified location
     pub fn place(
-        &self,
+        &mut self,
         header: RecordHeader,
         heartbeat: RecordHeartbeat,
         _data: Vec<u8>,
@@ -146,11 +196,15 @@ impl Capsule {
 
         // Insert heartbeat into the per-capsule heartbeat partition at the same key
         // used for the record (hash of header)
-        if let Some(hb_space) = &self.heartbeat_keyspace {
-            let header_hash = header.hash();
-            hb_space.insert(&header_hash, serde_json::to_vec(&heartbeat)?)?;
+        let header_hash = header.hash();
+        self.insert_into_heartbeat_partition_opt(&header_hash, serde_json::to_vec(&heartbeat)?)?;
+
+        if header.seqno > self.last_seqno {
+            self.last_seqno = header.seqno;
+            self.last_pointer = (header.seqno, header.hash())
         }
 
+        // Return created capsule
         Ok(())
     }
 
@@ -232,15 +286,20 @@ impl Capsule {
 
         // Store metadata record in the capsule partition under the metadata header hash key,
         // and also store the heartbeat in the heartbeat partition under the same key.
-        items.insert(&metadata_header_hash, serde_json::to_vec(&metadata_record)?)?;
-        heartbeat_items.insert(
+        partition_insert(
+            &items,
+            &metadata_header_hash,
+            serde_json::to_vec(&metadata_record)?,
+        )?;
+        partition_insert(
+            &heartbeat_items,
             &metadata_header_hash,
             serde_json::to_vec(&metadata_heartbeat)?,
         )?;
 
         // Store seqno -> header mapping for seqno 0
         let seq0_key = 0usize.to_be_bytes().to_vec();
-        seqno_items.insert(&seq0_key, metadata_header_hash.clone())?;
+        partition_insert(&seqno_items, &seq0_key, metadata_header_hash.clone())?;
 
         // Return created capsule
         Ok(Capsule {
@@ -387,18 +446,13 @@ impl Capsule {
         let items = self.keyspace.as_ref().unwrap();
 
         // Store the record under the header hash
-        items.insert(&header_hash, serde_json::to_vec(&record)?)?;
+        partition_insert(items, &header_hash, serde_json::to_vec(&record)?)?;
 
-        // Also store the heartbeat in the heartbeat partition at the same key
-        if let Some(hb_space) = &self.heartbeat_keyspace {
-            hb_space.insert(&header_hash, serde_json::to_vec(&heartbeat)?)?;
-        }
+        // Also store the heartbeat in the heartbeat partition at the same key (optional)
+        self.insert_into_heartbeat_partition_opt(&header_hash, serde_json::to_vec(&heartbeat)?)?;
 
-        // Also store seqno -> header_hash mapping
-        if let Some(seq_space) = &self.seqno_keyspace {
-            let seq_key = header.seqno.to_be_bytes().to_vec();
-            seq_space.insert(&seq_key, header_hash.clone())?;
-        }
+        // Also store seqno -> header_hash mapping (optional)
+        self.insert_into_seqno_partition_opt(header.seqno, header_hash.clone())?;
 
         // Update internal state
         self.last_seqno += 1;
@@ -513,13 +567,36 @@ impl Capsule {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("seqno partition not opened"))?;
         let key = seqno.to_be_bytes().to_vec();
-        seq_space.insert(&key, header_hash)?;
+        partition_insert(seq_space, &key, header_hash)?;
+        Ok(())
+    }
+
+    // Helper: insert heartbeat into heartbeat partition if opened.
+    fn insert_into_heartbeat_partition_opt(&self, key: &[u8], value: Vec<u8>) -> Result<()> {
+        if let Some(hb_space) = &self.heartbeat_keyspace {
+            partition_insert(hb_space, key, value)?;
+        }
+        Ok(())
+    }
+
+    // Helper: insert seqno -> header_hash into seqno partition if opened.
+    fn insert_into_seqno_partition_opt(&self, seqno: usize, header_hash: Vec<u8>) -> Result<()> {
+        if let Some(seq_space) = &self.seqno_keyspace {
+            let key = seqno.to_be_bytes().to_vec();
+            partition_insert(seq_space, &key, header_hash)?;
+        }
         Ok(())
     }
 
     pub fn peek(&self) -> Result<Record> {
         self.read(self.last_pointer.1.clone())
     }
+}
+
+/// Lightweight helper for inserting into a partition handle (centralized for clarity).
+fn partition_insert(part: &PartitionHandle, key: &[u8], value: Vec<u8>) -> Result<()> {
+    part.insert(key, value)?;
+    Ok(())
 }
 
 /// Feature-gated unchecked utilities live in their own module. This keeps the main

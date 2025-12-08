@@ -1,17 +1,22 @@
 use anyhow::Result;
-use capsulelib::capsule::{Capsule, Metadata, SHA256Hashable};
+use capsulelib::capsule::{
+    Capsule, Metadata, Record, RecordHeader, RecordHeartbeat, SHA256Hashable,
+};
 use capsulelib::requests::DataCapsuleRequest;
 use futures::{executor::LocalPool, future, stream::StreamExt, task::LocalSpawnExt};
 use r2r::Context;
 use r2r::QosProfile;
 
-fn handle_create(metadata: Metadata) -> Result<Capsule> {
-    Capsule::new(metadata);
+fn handle_create(
+    metadata: Metadata,
+    heartbeat: RecordHeartbeat,
+    header: RecordHeader,
+) -> Result<Capsule> {
     println!("creating capsule!");
     todo!()
 }
 
-fn handle_append(capsule_name: String, data: Vec<u8>) -> Result<()> {
+fn handle_append(capsule_name: String, record: Record) -> Result<()> {
     println!("appending data to capsule!");
     todo!()
 }
@@ -39,17 +44,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         subscriber
             .for_each(|msg| {
                 match serde_json::from_str::<DataCapsuleRequest>(&msg.data) {
-                    Ok(DataCapsuleRequest::Create { metadata }) => {
-                        handle_create(metadata);
+                    Ok(DataCapsuleRequest::Create {
+                        metadata,
+                        heartbeat,
+                        header,
+                    }) => {
+                        handle_create(metadata, heartbeat, header).expect("creation failed!");
                         println!("Capsule created!");
                     }
-                    Ok(DataCapsuleRequest::Append { metadata }) => {
-                        handle_create(metadata);
-                        println!("Capsule created!");
+                    Ok(DataCapsuleRequest::Append {
+                        capsule_name,
+                        record,
+                    }) => {
+                        handle_append(capsule_name, record).expect("append failed!");
+                        println!("Record appended!");
                     }
-                    Ok(DataCapsuleRequest::Read { metadata }) => {
-                        handle_create(metadata);
-                        println!("Capsule created!");
+                    Ok(DataCapsuleRequest::Read {
+                        capsule_name,
+                        header_hash,
+                    }) => {
+                        handle_read(capsule_name, header_hash).expect("read failed!");
+                        println!("Capsule read!");
                     }
                     Err(e) => {
                         println!("It's bwoken: {}", e);
