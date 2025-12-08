@@ -2,8 +2,6 @@ use super::structs::{Capsule, Metadata, RecordHeartbeat, RecordHeartbeatData, SH
 use ed25519_dalek::{Signature, Signer, SigningKey};
 use fjall::PartitionHandle;
 
-pub type Aes128Ctr64LE = ctr::Ctr64LE<aes::Aes128>;
-
 use anyhow::{Result, bail};
 
 /// Helper: sign a RecordHeartbeatData with a provided SigningKey.

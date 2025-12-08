@@ -1,18 +1,13 @@
-use aes::cipher::{KeyIvInit, StreamCipher};
+use ed25519_dalek::Signature;
 use ed25519_dalek::SigningKey;
-use ed25519_dalek::{Signature, Signer};
-use fjall::{Config, PartitionHandle};
-use fjall::{PartitionCreateOptions, PersistMode};
-use log::debug;
+use fjall::PartitionHandle;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, path::Path};
+use std::collections::BTreeMap;
 
 pub type Aes128Ctr64LE = ctr::Ctr64LE<aes::Aes128>;
 
-use anyhow::{Result, bail};
-
-struct MissingMetadataKey;
+// struct MissingMetadataKey;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct Metadata(pub BTreeMap<String, Vec<u8>>);
