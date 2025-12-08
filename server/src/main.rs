@@ -46,11 +46,11 @@ fn handle_create(
 ) -> Result<Capsule> {
     info!("creating capsule!");
     let gdp_name = metadata.hash_string();
-    let key_var = format!("{}_key", gdp_name);
-    let key_str = match std::env::var(&key_var) {
-        Ok(v) => v,
-        Err(_) => return Err(anyhow::anyhow!("environment variable {} not set", key_var)),
-    };
+    // let key_var = format!("{}_key", gdp_name);
+    // let key_str = match std::env::var(&key_var) {
+    //     Ok(v) => v,
+    //     Err(_) => return Err(anyhow::anyhow!("environment variable {} not set", key_var)),
+    // };
 
     // For now use a dummy symmetric key for testing.
     let symmetric_key: Vec<u8> = (0..16).collect::<Vec<u8>>();
