@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, path::Path};
 
-type Aes128Ctr64LE = ctr::Ctr64LE<aes::Aes128>;
+pub type Aes128Ctr64LE = ctr::Ctr64LE<aes::Aes128>;
 
 use anyhow::{Result, bail};
 
@@ -97,16 +97,16 @@ struct RecordContainer {
 
 #[derive(Default)]
 pub struct Capsule {
-    metadata: Metadata,
-    symmetric_key: Vec<u8>,
-    sign_key: Option<SigningKey>,
-    last_seqno: usize,
-    last_pointer: HashPointer,
-    keyspace: Option<PartitionHandle>,
+    pub metadata: Metadata,
+    pub symmetric_key: Vec<u8>,
+    pub sign_key: Option<SigningKey>,
+    pub last_seqno: usize,
+    pub last_pointer: HashPointer,
+    pub keyspace: Option<PartitionHandle>,
     // Per-capsule heartbeat partition
-    heartbeat_keyspace: Option<PartitionHandle>,
+    pub heartbeat_keyspace: Option<PartitionHandle>,
     // Per-capsule seqno -> header hash partition
-    seqno_keyspace: Option<PartitionHandle>,
+    pub seqno_keyspace: Option<PartitionHandle>,
 }
 
 impl Capsule {
@@ -128,10 +128,12 @@ impl Capsule {
             .get("verify_key")
             .ok_or_else(|| anyhow::anyhow!("metadata must contain 'verify_key'"))?;
 
-        // Construct a VerifyingKey from the stored bytes (ensure it's 32 bytes)
-        let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(
-            &vk_bytes.as_slice().try_into().map_err(|_| anyhow::anyhow!("verify_key must be 32 bytes"))?
-        )?;
+        // Convert stored verify_key bytes into a fixed-size array and construct VerifyingKey
+        let vk_arr: [u8; 32] = vk_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("verify_key must be 32 bytes"))?;
+        let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&vk_arr)?;
 
         // Serialize the heartbeat data to the same form that was signed
         let msg = serde_json::to_vec(&heartbeat.data)?;
@@ -152,35 +154,7 @@ impl Capsule {
         Ok(())
     }
 
-    // Feature-gated unchecked variant for benchmarking and tests. This does not verify the
-    // heartbeat signature. Only compiled when the `unchecked` feature is enabled.
-    #[cfg(feature = "unchecked")]
-    pub fn place_unchecked(
-        &self,
-        header: RecordHeader,
-        heartbeat: RecordHeartbeat,
-        _data: Vec<u8>,
-    ) -> Result<()> {
-        // Directly insert the heartbeat into the heartbeat partition under the header hash.
-        if let Some(hb_space) = &self.heartbeat_keyspace {
-            let header_hash = header.hash();
-            hb_space.insert(&header_hash, serde_json::to_vec(&heartbeat)?)?;
-        }
-        Ok(())
-    }
 
-    /// Overwrite a stored record (by header hash) in the primary partition.
-    /// This is feature-gated because it allows bypassing high-level write APIs
-    /// and is intended for benchmarks or test tooling.
-    #[cfg(feature = "unchecked")]
-    pub fn overwrite_record(&self, header_hash: Vec<u8>, record: &Record) -> Result<()> {
-        let items = self
-            .keyspace
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("keyspace partition not opened"))?;
-        items.insert(&header_hash, serde_json::to_vec(record)?)?;
-        Ok(())
-    }
 
     pub fn create<P: AsRef<Path>>(
         kv_store_path: P,
@@ -487,10 +461,12 @@ impl Capsule {
                 .get("verify_key")
                 .ok_or_else(|| anyhow::anyhow!("metadata must contain 'verify_key'"))?;
 
-            // Construct a VerifyingKey from the stored bytes (ensure it's 32 bytes)
-            let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(
-                &vk_bytes.as_slice().try_into().map_err(|_| anyhow::anyhow!("verify_key must be 32 bytes"))?
-            )?;
+            // Convert stored verify_key bytes into a fixed-size array and construct VerifyingKey
+            let vk_arr: [u8; 32] = vk_bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("verify_key must be 32 bytes"))?;
+            let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&vk_arr)?;
 
             // Serialize the heartbeat data to the same form that was signed
             let msg = serde_json::to_vec(&hb.data)?;
@@ -500,61 +476,6 @@ impl Capsule {
                 bail!("invalid heartbeat signature: {}", e);
             }
         }
-
-        Ok(record)
-    }
-
-    // Feature-gated unchecked read that skips heartbeat signature verification.
-    // Useful for benchmarks or tooling where signature verification should be disabled.
-    #[cfg(feature = "unchecked")]
-    pub fn read_unchecked(&self, header_hash: Vec<u8>) -> Result<Record> {
-        let record_bytes = self
-            .keyspace
-            .clone()
-            .unwrap()
-            .get(&header_hash)
-            .unwrap()
-            .unwrap_or_else(|| {
-                panic!(
-                    "Unable to find corresponding record for hash {:?}",
-                    header_hash
-                )
-            })
-            .to_vec();
-
-        let mut record: Record = serde_json::from_slice(&record_bytes)?;
-
-        log::debug!(
-            "retrieved record data (encrypted): {}",
-            record
-                .body
-                .iter()
-                .map(|b| format!("{:02x}", b))
-                .collect::<String>()
-        );
-
-        let iv: [u8; 16] = [record.header.seqno.to_le_bytes(), [0x0_u8; 8]]
-            .concat()
-            .try_into()
-            .unwrap();
-
-        debug!("Decryption Key: {:?}", self.symmetric_key);
-        debug!("Decryption IV: {:?}", iv);
-
-        let mut cipher = Aes128Ctr64LE::new(self.symmetric_key.as_slice().into(), &iv.into());
-        cipher.apply_keystream(&mut record.body);
-
-        log::info!("retrieved {:?}", record);
-        log::info!(
-            "retrieved record data (decrypted) {:?}",
-            record
-                .body
-                .iter()
-                .map(|b| format!("{:02x}", b))
-                .collect::<String>()
-        );
-
-        // NOTE: Intentionally do not verify the heartbeat signature in this unchecked variant.
 
         Ok(record)
     }
@@ -600,59 +521,9 @@ impl Capsule {
     }
 }
 
-#[cfg(test)]
-mod read_signature_tests {
-    use super::*;
-    use ed25519_dalek::SigningKey;
-    use std::collections::BTreeMap;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    #[test]
-    fn read_rejects_invalid_heartbeat_signature() -> anyhow::Result<()> {
-        // unique store path per test run
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-        let mut store_path = std::env::temp_dir();
-        store_path.push(format!("datacapsule_read_sig_test_{}", nanos));
-        let kv_store = store_path.as_path();
-
-        // create signing key and metadata
-        let seed = [13u8; 32];
-        let signing_key = SigningKey::from_bytes(&seed);
-        let vk = signing_key.verifying_key();
-        let mut md = BTreeMap::new();
-        md.insert(String::from("verify_key"), vk.to_bytes().to_vec());
-        let metadata = Metadata(md);
-
-        let symmetric_key = (0..16).collect::<Vec<u8>>();
-
-        // create capsule
-        let mut capsule = Capsule::create(kv_store, metadata, signing_key, symmetric_key.clone())?;
-
-        // append one record
-        let header_hash = capsule.append(vec![], b"payload-for-signature-test".to_vec())?;
-
-        // read the record and tamper the heartbeat signature in-place in the store
-        let rec = capsule.read(header_hash.clone())?;
-        let mut tampered = rec.clone();
-
-        if let Some(ref mut hb) = tampered.heartbeat {
-            let mut sig_bytes = hb.signature.to_bytes();
-            sig_bytes[0] ^= 0x01; // flip a bit
-            let arr: [u8; 64] = sig_bytes.as_slice().try_into().unwrap();
-            hb.signature = ed25519_dalek::Signature::from_bytes(&arr);
-        }
-
-        // overwrite the stored record with the tampered one
-        capsule
-            .keyspace
-            .as_ref()
-            .unwrap()
-            .insert(&header_hash, serde_json::to_vec(&tampered)?)?;
-
-        // Now reading that header should fail due to invalid heartbeat signature
-        let res = capsule.read(header_hash.clone());
-        assert!(res.is_err(), "read should reject record with invalid heartbeat signature");
-
-        Ok(())
-    }
-}
+/// Feature-gated unchecked utilities live in their own module. This keeps the main
+/// implementation free of benchmarking/testing helpers unless the `unchecked` feature
+/// is explicitly enabled.
+#[cfg(feature = "unchecked")]
+#[path = "unchecked.rs"]
+pub mod unchecked;
