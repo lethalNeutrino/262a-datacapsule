@@ -39,8 +39,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let encryption_key = (0..16).collect::<Vec<u8>>();
 
     let mut connection = Connection::new()?;
-    let metadata_map: BTreeMap<String, Vec<u8>> =
-        BTreeMap::from([(String::from("verify_key"), (0..16).collect::<Vec<u8>>())]);
+    let metadata_map: BTreeMap<String, Vec<u8>> = BTreeMap::from([(
+        String::from("verify_key"),
+        generated_verify_key_bytes.to_vec(),
+    )]);
     let metadata = Metadata(metadata_map);
     let capsule_topic =
         connection.create(data_path, metadata, generated_signing_key, encryption_key)?;
