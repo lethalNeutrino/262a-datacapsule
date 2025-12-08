@@ -54,7 +54,7 @@ impl SHA256Hashable for HashPointer {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Record {
     pub header: RecordHeader,
-    pub heartbeat: RecordHeartbeat,
+    pub heartbeat: Option<RecordHeartbeat>,
     pub body: Vec<u8>,
 }
 
@@ -110,6 +110,34 @@ impl Capsule {
     #[inline]
     pub fn gdp_name(&self) -> String {
         self.metadata.hash_string()
+    }
+
+    pub fn place(
+        &self,
+        header: RecordHeader,
+        heartbeat: RecordHeartbeat,
+        _data: Vec<u8>,
+    ) -> Result<()> {
+        // Ensure metadata contains the verify key
+        let vk_bytes = self
+            .metadata
+            .0
+            .get("verify_key")
+            .ok_or_else(|| anyhow::anyhow!("metadata must contain 'verify_key'"))?;
+
+        // Construct a VerifyingKey from the stored bytes
+        let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(vk_bytes.as_slice())?;
+
+        // Serialize the heartbeat data to the same form that was signed
+        let msg = serde_json::to_vec(&heartbeat.data)?;
+
+        // Verify the signature on the heartbeat.data
+        if let Err(e) = ed25519_dalek::Verifier::verify(&verifying_key, &msg, &heartbeat.signature)
+        {
+            bail!("invalid heartbeat signature: {}", e);
+        }
+
+        Ok(())
     }
 
     pub fn create<P: AsRef<Path>>(
@@ -171,7 +199,7 @@ impl Capsule {
         // Create initial record + insert into Fjall
         let metadata_record = Record {
             header: metadata_header.clone(),
-            heartbeat: metadata_heartbeat,
+            heartbeat: Some(metadata_heartbeat),
             body: metadata_bytes,
         };
 
@@ -306,7 +334,7 @@ impl Capsule {
 
         let record = Record {
             header: header.clone(),
-            heartbeat,
+            heartbeat: Some(heartbeat),
             body: data,
         };
 

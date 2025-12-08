@@ -5,8 +5,19 @@ use futures::{executor::LocalPool, future, stream::StreamExt, task::LocalSpawnEx
 use r2r::Context;
 use r2r::QosProfile;
 
-fn process_create(metadata: Metadata) -> Result<Capsule> {
+fn handle_create(metadata: Metadata) -> Result<Capsule> {
+    Capsule::new(metadata);
     println!("creating capsule!");
+    todo!()
+}
+
+fn handle_append(capsule_name: String, data: Vec<u8>) -> Result<()> {
+    println!("appending data to capsule!");
+    todo!()
+}
+
+fn handle_read(capsule_name: String, header: Vec<u8>) -> Result<Vec<u8>> {
+    println!("reading data from capsule!");
     todo!()
 }
 
@@ -29,7 +40,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .for_each(|msg| {
                 match serde_json::from_str::<DataCapsuleRequest>(&msg.data) {
                     Ok(DataCapsuleRequest::Create { metadata }) => {
-                        process_create(metadata);
+                        handle_create(metadata);
+                        println!("Capsule created!");
+                    }
+                    Ok(DataCapsuleRequest::Append { metadata }) => {
+                        handle_create(metadata);
+                        println!("Capsule created!");
+                    }
+                    Ok(DataCapsuleRequest::Read { metadata }) => {
+                        handle_create(metadata);
                         println!("Capsule created!");
                     }
                     Err(e) => {
