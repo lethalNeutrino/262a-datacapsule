@@ -1,6 +1,11 @@
-use r2r::Context;
 use futures::{executor::LocalPool, future, stream::StreamExt, task::LocalSpawnExt};
+use r2r::Context;
 use r2r::QosProfile;
+
+fn process_create(gdp_name: String) -> Result<()> {
+    println!("creating capsule!");
+    Ok(())
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ctx = r2r::Context::create()?;

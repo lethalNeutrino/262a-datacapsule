@@ -274,6 +274,7 @@ dependencies = [
  "crypto",
  "fjall",
  "r2r",
+ "serde",
  "sha2",
  "tokio",
 ]
@@ -342,6 +343,8 @@ dependencies = [
  "datacapsule-capsulelib",
  "futures",
  "r2r",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

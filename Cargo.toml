@@ -20,6 +20,7 @@ fjall = "2.11.2"
 sha2 = "0.10.9"
 tokio = { version = "1.48.0", features = ["full"] }
 r2r = "0.9.5"
+serde = "1.0.228"
 
 [[bin]]
 name = "server"
