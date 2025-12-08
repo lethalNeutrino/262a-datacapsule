@@ -1,6 +1,8 @@
 mod capsule;
 
+use std::cell::RefCell;
 use std::path::Path;
+use std::rc::Rc;
 
 use anyhow::Result;
 use capsule::{NetworkCapsuleReader, NetworkCapsuleWriter};
@@ -98,7 +100,12 @@ impl Connection {
         })
     }
 
-    pub fn get(&mut self, gdp_name: String) -> Result<NetworkCapsuleReader> {
+    pub fn get(
+        &mut self,
+        gdp_name: String,
+        symmetric_key: Vec<u8>,
+    ) -> Result<NetworkCapsuleReader> {
+        // Create the subscriber and publisher for this capsule.
         let subscriber = self.node.subscribe::<r2r::std_msgs::msg::String>(
             &format!("/capsule_{}/client", gdp_name),
             QosProfile::default(),
@@ -108,6 +115,7 @@ impl Connection {
             QosProfile::default(),
         )?;
 
+        // Build and send the Get request.
         let request = DataCapsuleRequest::Get {
             capsule_name: gdp_name.clone(),
         };
@@ -117,25 +125,28 @@ impl Connection {
 
         self.chatter.publisher.publish(&msg)?;
 
+        // Holder to receive the response from the spawned task.
+        // We use Rc<RefCell<Option<...>>> so the async task can set the value
+        // and the synchronous caller can observe it (single-threaded LocalPool).
+        let response_holder: Rc<RefCell<Option<DataCapsuleRequest>>> = Rc::new(RefCell::new(None));
+        let holder_for_task = Rc::clone(&response_holder);
+
+        // Move the subscriber into the spawned task. We do NOT keep the subscriber
+        // in the returned Topic; instead we return an empty subscriber (main-thread
+        // publisher access remains).
         self.pool.spawner().spawn_local(async move {
             subscriber
-                .for_each(|msg| {
+                .for_each(move |msg| {
                     match serde_json::from_str::<DataCapsuleRequest>(&msg.data) {
-                        Ok(DataCapsuleRequest::GetResponse {
-                            metadata,
-                            header,
-                            heartbeat,
-                        }) => {
-                            println!(
-                                "got response back metadata: {:?}, header: {:?}, heartbeat: {:?}",
-                                metadata, header, heartbeat
-                            );
+                        Ok(res @ DataCapsuleRequest::GetResponse { .. }) => {
+                            // store the response in the shared holder
+                            *holder_for_task.borrow_mut() = Some(res);
+                        }
+                        Ok(_) => {
+                            // other messages ignored for now
                         }
                         Err(e) => {
                             println!("It's bwoken: {}", e);
-                        }
-                        _ => {
-                            println!("not yet implemented");
                         }
                     };
                     future::ready(())
@@ -143,13 +154,42 @@ impl Connection {
                 .await
         })?;
 
+        // Spin the node and run the local task pool until we get a response.
+        // This keeps everything on the same thread and avoids returning before
+        // the response is available.
+        while response_holder.borrow().is_none() {
+            self.node.spin_once(std::time::Duration::from_millis(100));
+            self.pool.run_until_stalled();
+        }
+
+        // Optionally extract the parsed response if you need to inspect it here.
+        let parsed = response_holder.borrow_mut().take().unwrap();
+        println!("got back {:?}", parsed);
+        let local_capsule = if let DataCapsuleRequest::GetResponse {
+            metadata,
+            heartbeat,
+            header,
+        } = parsed
+        {
+            Capsule::open(
+                ".fjall_data".to_string(),
+                metadata,
+                header,
+                heartbeat,
+                symmetric_key,
+            )?
+        } else {
+            Capsule::default()
+        };
+
         Ok(NetworkCapsuleReader {
             connection: Topic {
                 name: gdp_name,
-                subscriber: Box::new(subscriber),
+                // we moved the real subscriber into the spawned task; return an empty placeholder
+                subscriber: Box::new(futures::stream::empty::<r2r::std_msgs::msg::String>()),
                 publisher,
             },
-            local_capsule: Capsule::default(),
+            local_capsule,
         })
     }
 }

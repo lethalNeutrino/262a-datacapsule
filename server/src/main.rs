@@ -143,6 +143,109 @@ fn handle_append(capsule_name: String, record: Record) -> Result<()> {
 
     let mut local_capsule = Capsule::get(".fjall_data/".to_string(), capsule_name, symmetric_key)?;
     local_capsule.place(record.header, record.heartbeat.unwrap(), record.body)?;
+    info!("capsule created!");
+
+    Ok(())
+}
+
+fn handle_get(
+    node_rc: &Rc<RefCell<Node>>,
+    spawner_rc: Rc<RefCell<futures::executor::LocalSpawner>>,
+    local_topics: Rc<RefCell<HashMap<String, Topic>>>,
+    shared_index: Arc<Mutex<HashMap<String, String>>>,
+    capsule_name: String,
+) -> Result<()> {
+    println!("getting capsule!");
+    // For now use a dummy symmetric key for testing.
+    let symmetric_key: Vec<u8> = (0..16).collect::<Vec<u8>>();
+
+    let local_capsule = Capsule::get(
+        ".fjall_data".to_string(),
+        capsule_name.clone(),
+        symmetric_key,
+    )?;
+    // Create Header
+    let metadata_header = RecordHeader {
+        seqno: 0,
+        gdp_name: capsule_name.clone().to_string(),
+        prev_ptr: None,
+        hash_ptrs: Vec::new(),
+    };
+
+    let metadata_header_hash = metadata_header.hash();
+    let metadata_record = local_capsule.read(metadata_header_hash)?;
+
+    // Create subscriber/publisher with a short mutable borrow of the node
+    let subscriber = {
+        let mut node = node_rc.borrow_mut();
+        node.subscribe::<r2r::std_msgs::msg::String>(
+            &format!("/capsule_{}/server", capsule_name),
+            QosProfile::default(),
+        )?
+    };
+
+    let publisher = {
+        let mut node = node_rc.borrow_mut();
+        node.create_publisher::<r2r::std_msgs::msg::String>(
+            &format!("/capsule_{}/client", capsule_name),
+            QosProfile::default(),
+        )?
+    };
+
+    // Send initial ack (if that variant exists)
+    let _ = publisher.publish(&r2r::std_msgs::msg::String {
+        data: serde_json::to_string(&DataCapsuleRequest::GetResponse {
+            metadata: local_capsule.metadata,
+            heartbeat: metadata_record.heartbeat.unwrap(),
+            header: metadata_record.header,
+        })?,
+    });
+
+    // Insert a lightweight record into the thread-safe shared index so other threads can see this capsule
+    {
+        let mut idx = shared_index.lock().unwrap();
+        idx.insert(
+            capsule_name.clone(),
+            format!("/capsule_{}/client", capsule_name.clone()),
+        );
+    }
+
+    // Store publisher in local map so main thread can publish later if needed.
+    // We can't store the actual live subscriber (it will be moved into its own task),
+    // so to satisfy the `Topic` type we store an empty stream as the placeholder for subscriber.
+    let topic_entry = Topic {
+        name: capsule_name.clone(),
+        subscriber: Box::new(stream::empty::<r2r::std_msgs::msg::String>()),
+        publisher,
+    };
+    local_topics
+        .borrow_mut()
+        .insert(capsule_name.clone(), topic_entry);
+
+    // Spawn a task to process incoming messages on the subscriber.
+    // Use the LocalSpawner wrapped in Rc<RefCell<..>> (single-threaded).
+    {
+        // Clone what the task needs.
+        let capsule_name_for_task = capsule_name.clone();
+        // Move the actual subscriber into the task so it can `.for_each`.
+        let mut spawner = spawner_rc.borrow_mut();
+        let spawn_result = spawner.spawn_local(async move {
+            subscriber
+                .for_each(move |msg| {
+                    println!("[{}] capsule message: {}", capsule_name_for_task, msg.data);
+                    future::ready(())
+                })
+                .await;
+        });
+
+        if let Err(e) = spawn_result {
+            // spawn failed; log but continue. We return success for the capsule creation itself.
+            eprintln!(
+                "failed to spawn subscriber task for {}: {:?}",
+                capsule_name, e
+            );
+        }
+    }
 
     Ok(())
 }
@@ -225,6 +328,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 metadata,
                                 heartbeat,
                                 header,
+                            ) {
+                                Ok(_) => {
+                                    println!("Capsule created!");
+                                }
+                                Err(e) => {
+                                    eprintln!("creation failed: {}", e);
+                                }
+                            }
+                        }
+                        Ok(DataCapsuleRequest::Get { capsule_name }) => {
+                            let spawner_for_call = spawner_clone_for_handle.clone();
+                            let local_topics_for_call = local_topics_clone_for_handle.clone();
+                            let shared_index_for_call = shared_index_clone_for_handle.clone();
+
+                            match handle_get(
+                                &node_for_task,
+                                spawner_for_call,
+                                local_topics_for_call,
+                                shared_index_for_call,
+                                capsule_name,
                             ) {
                                 Ok(_) => {
                                     println!("Capsule created!");

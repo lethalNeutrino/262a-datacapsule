@@ -1,7 +1,7 @@
 use crate::capsule::structs::{Metadata, Record, RecordHeader, RecordHeartbeat};
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub enum DataCapsuleRequest {
     Create {
         metadata: Metadata,
