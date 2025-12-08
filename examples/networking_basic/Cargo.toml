@@ -6,3 +6,5 @@ edition = "2024"
 [dependencies]
 futures = "0.3.31"
 r2r = "0.9.5"
+capsulelib = { package = "datacapsule-capsulelib", path = "../../capsulelib" }
+capsuleclient = { package = "datacapsule-userlib", path = "../../client" }

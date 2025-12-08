@@ -16,9 +16,11 @@ use anyhow::{Result, bail};
 struct MissingMetadataKey;
 
 pub type HashPointer = (usize, Vec<u8>);
-pub type Metadata = BTreeMap<String, Vec<u8>>;
 
-trait SHA256Hashable {
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct Metadata(pub BTreeMap<String, Vec<u8>>);
+
+pub trait SHA256Hashable {
     fn hash(&self) -> Vec<u8>;
     fn hash_string(&self) -> String {
         self.hash()
@@ -28,23 +30,23 @@ trait SHA256Hashable {
     }
 }
 
+impl SHA256Hashable for Metadata {
+    fn hash(&self) -> Vec<u8> {
+        // compute SHA256 hash of metadata deterministically (BTreeMap is ordered)
+        let mut hasher = Sha256::new();
+        for (k, v) in &self.0 {
+            hasher.update(k.as_bytes());
+            hasher.update(v);
+        }
+        hasher.finalize().to_vec()
+    }
+}
+
 impl SHA256Hashable for HashPointer {
     fn hash(&self) -> Vec<u8> {
         let mut hasher = Sha256::new();
         hasher.update(self.0.to_be_bytes());
         hasher.update(&self.1);
-        hasher.finalize().to_vec()
-    }
-}
-
-impl SHA256Hashable for Metadata {
-    fn hash(&self) -> Vec<u8> {
-        // compute SHA256 hash of metadata deterministically (BTreeMap is ordered)
-        let mut hasher = Sha256::new();
-        for (k, v) in self {
-            hasher.update(k.as_bytes());
-            hasher.update(v);
-        }
         hasher.finalize().to_vec()
     }
 }
@@ -95,38 +97,28 @@ struct RecordContainer {
 }
 
 #[derive(Default)]
-pub struct Capsule<P>
-where
-    P: AsRef<Path> + Default,
-{
-    metadata: BTreeMap<String, Vec<u8>>,
+pub struct Capsule {
+    metadata: Metadata,
     symmetric_key: Vec<u8>,
     sign_key: Option<SigningKey>,
     last_seqno: usize,
     last_pointer: HashPointer,
-    store_path: P,
     keyspace: Option<PartitionHandle>,
 }
 
-impl<P> Capsule<P>
-where
-    P: AsRef<Path> + Default,
-{
+impl Capsule {
     #[inline]
     pub fn gdp_name(&self) -> String {
         self.metadata.hash_string()
     }
 
-    pub fn create(
+    pub fn create<P: AsRef<Path>>(
         kv_store_path: P,
-        metadata: BTreeMap<String, Vec<u8>>,
+        metadata: Metadata,
         sign_key: SigningKey,
         symmetric_key: Vec<u8>,
-    ) -> Result<Self>
-    where
-        P: AsRef<Path>,
-    {
-        if !metadata.contains_key(&String::from("verify_key")) {
+    ) -> Result<Self> {
+        if !metadata.0.contains_key(&String::from("verify_key")) {
             bail!("metadata must contain 'verify_key'");
         }
 
@@ -172,7 +164,7 @@ where
 
         // Encrypt metadata
         let iv = [0x0; 16];
-        let mut metadata_bytes = serde_json::to_vec(&metadata)?;
+        let mut metadata_bytes = serde_json::to_vec(&metadata.0)?;
         let mut cipher = Aes128Ctr64LE::new(symmetric_key.as_slice().into(), &iv.into());
         cipher.apply_keystream(&mut metadata_bytes);
 
@@ -188,7 +180,6 @@ where
         // Return created capsule
         Ok(Capsule {
             metadata: metadata.clone(),
-            store_path: kv_store_path,
             sign_key: Some(sign_key),
             symmetric_key,
             last_pointer: (0, metadata_header.hash()),
@@ -197,25 +188,60 @@ where
         })
     }
 
-    pub fn get(kv_store_path: P, gdp_name: String, symmetric_key: Vec<u8>) -> Result<Self>
-    where
-        P: AsRef<Path>,
-    {
-        let keyspace = Config::new(kv_store_path).open()?;
-        let items = keyspace.open_partition(&gdp_name, PartitionCreateOptions::default())?;
-        let metadata_bytes_vec = items
-            .get(&gdp_name)?
-            .expect("The GDP name provided does not map to a capsule in the provided database.")
-            .to_vec();
+    pub fn get<P: AsRef<Path>>(
+        kv_store_path: P,
+        gdp_name: String,
+        symmetric_key: Vec<u8>,
+        sign_key: SigningKey,
+    ) -> Result<Self> {
+        let keyspace = Config::new(&kv_store_path)
+            .max_write_buffer_size(128 * 1024 * 1024)
+            .open()?;
+        // keyspace.set_max_memtable_size(32 * 1_024 * 1_024);
+        // Config::new().
+        keyspace.persist(PersistMode::SyncAll)?;
 
-        let metadata_bytes = metadata_bytes_vec.as_slice();
-        let metadata: BTreeMap<String, Vec<u8>> = serde_json::from_slice(metadata_bytes)?;
+        // Create a partition of the keyspace for a DataCapsule
+        // let gdp_name: &str = &metadata.hash_string();
+        let items = keyspace.open_partition(
+            gdp_name.as_str(),
+            PartitionCreateOptions::default().max_memtable_size(64 * 1024 * 1024),
+        )?;
 
-        Ok(Capsule {
+        let record_data = items.get(gdp_name)?.unwrap();
+        let record: Record = serde_json::from_slice(&record_data)?;
+
+        let header = record.header;
+        let heartbeat = record.heartbeat;
+        let mut body = record.body;
+
+        let iv = [0x0; 16];
+        let mut cipher = Aes128Ctr64LE::new(symmetric_key.as_slice().into(), &iv.into());
+        cipher.apply_keystream(&mut body);
+
+        let metadata: Metadata = serde_json::from_slice(&body)?;
+
+        let caps = Capsule {
             metadata: metadata.clone(),
-            symmetric_key,
+            sign_key: Some(sign_key),
+            symmetric_key: symmetric_key.clone(),
+            // metadata: metadata.clone(),
+            // symmetric_key,
             ..Default::default()
-        })
+        };
+        // // Create Header
+
+        // let keyspace = Config::new(kv_store_path).open()?;
+        // let items = keyspace.open_partition(&gdp_name, PartitionCreateOptions::default())?;
+        // let metadata_bytes_vec = items
+        //     .get(&gdp_name)?
+        //     .expect("The GDP name provided does not map to a capsule in the provided database.")
+        //     .to_vec();
+
+        // let metadata_bytes = metadata_bytes_vec.as_slice();
+        // let metadata: BTreeMap<String, Vec<u8>> = serde_json::from_slice(metadata_bytes)?;
+
+        Ok(caps)
     }
 
     pub fn append(&mut self, hash_ptrs: Vec<HashPointer>, mut data: Vec<u8>) -> Result<Vec<u8>> {
@@ -256,12 +282,10 @@ where
         );
 
         // Encrypt Data
-        // JONAH LET US KNOW IF THIS IS TREAM
-        let iv: [u8; 16] = [(self.last_seqno + 1).to_le_bytes(), [0x0_u8; 8]]
-            .concat()
-            .try_into()
-            .unwrap();
-        // let mut data_bytes = serde_json::to_vec(&data)?;
+        let mut hasher = Sha256::new();
+        hasher.update(self.gdp_name()[..32].as_bytes());
+        hasher.update((self.last_seqno + 1).to_le_bytes());
+        let iv: [u8; 16] = hasher.finalize()[..16].try_into().unwrap();
         log::debug!(
             "Serialized data: {:?}",
             data.iter()
@@ -300,11 +324,10 @@ where
     }
 
     pub fn read(&self, header_hash: Vec<u8>) -> Result<Record> {
-        let keyspace = Config::new(&self.store_path).open()?;
-        let items =
-            keyspace.open_partition(self.gdp_name().as_str(), PartitionCreateOptions::default())?;
-
-        let record_bytes = items
+        let record_bytes = self
+            .keyspace
+            .clone()
+            .unwrap()
             .get(&header_hash)
             .unwrap()
             .unwrap_or_else(|| {

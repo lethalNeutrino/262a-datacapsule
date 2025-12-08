@@ -4,8 +4,7 @@ extern crate log;
 use anyhow::bail;
 use ed25519_dalek::SigningKey;
 use std::{collections::BTreeMap, path::Path};
-
-use capsulelib::Capsule;
+use capsulelib::{Capsule, Metadata};
 
 fn main() -> anyhow::Result<()> {
     pretty_env_logger::init();
@@ -18,7 +17,7 @@ fn main() -> anyhow::Result<()> {
 
     let encryption_key = (0..16).collect::<Vec<u8>>();
 
-    let mut capsule = Capsule::create(data_path, metadata, signing_key, encryption_key)?;
+    let mut capsule = Capsule::create(data_path, Metadata(metadata), signing_key, encryption_key)?;
     info!("Capsule created successfully");
 
     let data = "Hello, world!";

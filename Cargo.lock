@@ -273,6 +273,7 @@ dependencies = [
  "anyhow",
  "crypto",
  "fjall",
+ "r2r",
  "sha2",
  "tokio",
 ]
@@ -865,6 +866,8 @@ dependencies = [
 name = "networking_basic"
 version = "0.1.0"
 dependencies = [
+ "datacapsule-capsulelib",
+ "datacapsule-userlib",
  "futures",
  "r2r",
 ]
