@@ -877,8 +877,12 @@ version = "0.1.0"
 dependencies = [
  "datacapsule-capsulelib",
  "datacapsule-userlib",
+ "ed25519-dalek",
  "futures",
+ "log",
+ "pretty_env_logger",
  "r2r",
+ "serde_json",
 ]
 
 [[package]]

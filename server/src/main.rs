@@ -70,6 +70,12 @@ fn handle_create(
         )?,
     };
 
+    capsule_topic
+        .publisher
+        .publish(&r2r::std_msgs::msg::String {
+            data: serde_json::to_string(&DataCapsuleRequest::Ack)?,
+        });
+
     // At this point `node` mutable borrow is dropped when `node` goes out of scope.
 
     info!("capsule created!");
