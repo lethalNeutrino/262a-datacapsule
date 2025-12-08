@@ -44,12 +44,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         generated_verify_key_bytes.to_vec(),
     )]);
     let metadata = Metadata(metadata_map);
-    let mut capsule_writer =
-        connection.create(data_path, metadata, generated_signing_key, encryption_key)?;
+    let mut capsule_writer = connection.create(
+        data_path,
+        metadata,
+        generated_signing_key,
+        encryption_key.clone(),
+    )?;
 
     capsule_writer.append(vec![], "Hello, World!".as_bytes().to_vec())?;
 
-    let mut capsule_reader = connection.get(capsule_writer.local_capsule.gdp_name())?;
+    let mut capsule_reader =
+        connection.get(capsule_writer.local_capsule.gdp_name(), encryption_key)?;
 
     connection.pool.spawner().spawn_local(async move {
         capsule_writer
