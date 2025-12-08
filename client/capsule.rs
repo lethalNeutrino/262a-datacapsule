@@ -22,7 +22,7 @@ impl NetworkCapsuleWriter {
             .publisher
             .publish(&r2r::std_msgs::msg::String {
                 data: serde_json::to_string(&request)?,
-            });
+            })?;
 
         Ok(())
     }
