@@ -2,13 +2,11 @@ pub mod structs;
 mod utils;
 use aes::cipher::{KeyIvInit, StreamCipher};
 use ed25519_dalek::SigningKey;
-use ed25519_dalek::{Signature, Signer};
-use fjall::{Config, PartitionHandle};
+use fjall::Config;
 use fjall::{PartitionCreateOptions, PersistMode};
 use log::debug;
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, path::Path};
+use std::path::Path;
 use structs::{
     Capsule, HashPointer, Metadata, Record, RecordHeader, RecordHeartbeat, RecordHeartbeatData,
     SHA256Hashable,
@@ -196,7 +194,6 @@ impl Capsule {
             keyspace: Some(items),
             heartbeat_keyspace: Some(heartbeat_items),
             seqno_keyspace: Some(seqno_items),
-            ..Default::default()
         })
     }
 
@@ -302,7 +299,7 @@ impl Capsule {
 
         // Encrypt Data
         let mut hasher = Sha256::new();
-        hasher.update(self.gdp_name()[..32].as_bytes());
+        hasher.update(&self.gdp_name().as_bytes()[..32]);
         hasher.update((self.last_seqno + 1).to_le_bytes());
         let iv: [u8; 16] = hasher.finalize()[..16].try_into().unwrap();
         log::debug!(
