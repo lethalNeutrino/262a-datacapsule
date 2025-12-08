@@ -105,6 +105,8 @@ pub struct Capsule {
     keyspace: Option<PartitionHandle>,
     // Per-capsule heartbeat partition
     heartbeat_keyspace: Option<PartitionHandle>,
+    // Per-capsule seqno -> header hash partition
+    seqno_keyspace: Option<PartitionHandle>,
 }
 
 impl Capsule {
@@ -180,6 +182,13 @@ impl Capsule {
             PartitionCreateOptions::default().max_memtable_size(32 * 1024 * 1024),
         )?;
 
+        // Create a separate partition for seqno->header mappings
+        let seqno_partition_name = format!("{}-seqnos", gdp_name);
+        let seqno_items = keyspace.open_partition(
+            seqno_partition_name.as_str(),
+            PartitionCreateOptions::default().max_memtable_size(16 * 1024 * 1024),
+        )?;
+
         // Create Header
         let metadata_header = RecordHeader {
             seqno: 0,
@@ -219,24 +228,25 @@ impl Capsule {
             body: metadata_bytes,
         };
 
-        // Store metadata record in the capsule partition under the capsule name key,
+        // Store metadata record in the capsule partition under the metadata header hash key,
         // and also store the heartbeat in the heartbeat partition under the same key.
-        // Additionally store both under the metadata header hash so they can be looked
-        // up by header hash as well.
-        items.insert(gdp_name, serde_json::to_vec(&metadata_record)?)?;
-        heartbeat_items.insert(gdp_name, serde_json::to_vec(&metadata_heartbeat)?)?;
-        // also store under metadata header hash
         items.insert(&metadata_header_hash, serde_json::to_vec(&metadata_record)?)?;
         heartbeat_items.insert(&metadata_header_hash, serde_json::to_vec(&metadata_heartbeat)?)?;
+
+        // Store seqno -> header mapping for seqno 0
+        let seq0_key = 0usize.to_be_bytes().to_vec();
+        seqno_items.insert(&seq0_key, metadata_header_hash.clone())?;
 
         // Return created capsule
         Ok(Capsule {
             metadata: metadata.clone(),
             sign_key: Some(sign_key),
             symmetric_key,
+            last_seqno: 0,
             last_pointer: (0, metadata_header.hash()),
             keyspace: Some(items),
             heartbeat_keyspace: Some(heartbeat_items),
+            seqno_keyspace: Some(seqno_items),
             ..Default::default()
         })
     }
@@ -265,8 +275,23 @@ impl Capsule {
             PartitionCreateOptions::default().max_memtable_size(32 * 1024 * 1024),
         )?;
 
-        // Read the metadata record to reconstruct capsule metadata
-        let record_data = items.get(gdp_name)?.unwrap();
+        // Open corresponding seqno partition for this capsule
+        let seqno_partition_name = format!("{}-seqnos", gdp_name.as_str());
+        let seqno_items = keyspace.open_partition(
+            seqno_partition_name.as_str(),
+            PartitionCreateOptions::default().max_memtable_size(16 * 1024 * 1024),
+        )?;
+
+        // Compute metadata header hash (seqno 0, gdp_name, no prev/hash_ptrs)
+        let metadata_header = RecordHeader {
+            seqno: 0,
+            gdp_name: gdp_name.clone(),
+            prev_ptr: None,
+            hash_ptrs: Vec::new(),
+        };
+        let metadata_header_hash = metadata_header.hash();
+
+        let record_data = items.get(&metadata_header_hash)?.unwrap();
         let record: Record = serde_json::from_slice(&record_data)?;
 
         let mut body = record.body;
@@ -280,6 +305,7 @@ impl Capsule {
         Ok(Capsule {
             keyspace: Some(items),
             heartbeat_keyspace: Some(heartbeat_items),
+            seqno_keyspace: Some(seqno_items),
             metadata,
             sign_key: Some(sign_key),
             symmetric_key,
@@ -363,6 +389,12 @@ impl Capsule {
             hb_space.insert(&header_hash, serde_json::to_vec(&heartbeat)?)?;
         }
 
+        // Also store seqno -> header_hash mapping
+        if let Some(seq_space) = &self.seqno_keyspace {
+            let seq_key = header.seqno.to_be_bytes().to_vec();
+            seq_space.insert(&seq_key, header_hash.clone())?;
+        }
+
         // Update internal state
         self.last_seqno += 1;
         self.last_pointer = (header.seqno, header.hash());
@@ -419,10 +451,7 @@ impl Capsule {
         Ok(record)
     }
 
-    pub fn peek(&self) -> Result<Record> {
-        self.read(self.last_pointer.1.clone())
-    }
-
+    /// Read heartbeat stored in the heartbeat partition by header hash.
     pub fn read_heartbeat(&self, header_hash: Vec<u8>) -> Result<RecordHeartbeat> {
         let hb_bytes = self
             .heartbeat_keyspace
@@ -432,6 +461,34 @@ impl Capsule {
             .ok_or_else(|| anyhow::anyhow!("heartbeat not found for header hash"))?;
         let hb: RecordHeartbeat = serde_json::from_slice(&hb_bytes)?;
         Ok(hb)
+    }
+
+    /// Return the header hash stored for the given seqno (persistent mapping).
+    pub fn get_header_hash_for_seqno(&self, seqno: usize) -> Result<Vec<u8>> {
+        let seq_space = self
+            .seqno_keyspace
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("seqno partition not opened"))?;
+        let key = seqno.to_be_bytes().to_vec();
+        let v = seq_space
+            .get(&key)?
+            .ok_or_else(|| anyhow::anyhow!("no header hash for seqno {}", seqno))?;
+        Ok(v.to_vec())
+    }
+
+    /// Store (seqno -> header_hash) mapping into the seqno partition.
+    pub fn put_header_hash_for_seqno(&self, seqno: usize, header_hash: Vec<u8>) -> Result<()> {
+        let seq_space = self
+            .seqno_keyspace
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("seqno partition not opened"))?;
+        let key = seqno.to_be_bytes().to_vec();
+        seq_space.insert(&key, header_hash)?;
+        Ok(())
+    }
+
+    pub fn peek(&self) -> Result<Record> {
+        self.read(self.last_pointer.1.clone())
     }
 }
 
@@ -443,7 +500,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn heartbeats_traversal() -> anyhow::Result<()> {
+    fn heartbeats_traversal_and_seqno_map() -> anyhow::Result<()> {
         // unique store path per test run
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
         let mut store_path = std::env::temp_dir();
@@ -463,15 +520,18 @@ mod tests {
         let mut capsule = Capsule::create(kv_store, metadata, signing_key, symmetric_key.clone())?;
 
         // append several records
+        let mut expected_hashes: Vec<Vec<u8>> = Vec::new();
         for i in 1..=4 {
             let data = format!("payload {}", i).into_bytes();
-            capsule.append(vec![], data)?;
+            let header_hash = capsule.append(vec![], data)?;
+            expected_hashes.push(header_hash);
         }
 
         // peek root and traverse back via prev_ptr verifying heartbeats match
         let root = capsule.peek()?;
         let mut current_hash = root.header.hash();
 
+        let mut seen_seqnos = Vec::new();
         loop {
             let record = capsule.read(current_hash.clone())?;
             let hb = capsule.read_heartbeat(current_hash.clone())?;
@@ -479,11 +539,27 @@ mod tests {
             let hb_ser = serde_json::to_vec(&hb)?;
             assert_eq!(rec_hb_ser, hb_ser);
 
+            // verify seqno mapping for this seqno points to this header hash
+            let seq = record.header.seqno;
+            let mapped = capsule.get_header_hash_for_seqno(seq)?;
+            assert_eq!(mapped, current_hash);
+
+            seen_seqnos.push(seq);
+
             if let Some(prev) = record.header.prev_ptr {
                 current_hash = prev.1;
             } else {
                 break;
             }
+        }
+
+        // ensure we saw seqno 0 (metadata) and the appended seqnos
+        assert!(seen_seqnos.contains(&0usize));
+        for h in expected_hashes {
+            // each expected header hash should be findable via its seqno lookup
+            // find seqno by scanning seqno partition (we already tested get_header_hash_for_seqno above)
+            // Here just ensure header exists in storage
+            let _r = capsule.read(h)?;
         }
 
         Ok(())
