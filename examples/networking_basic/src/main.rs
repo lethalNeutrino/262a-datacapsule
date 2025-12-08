@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 
-use capsuleclient::{Connection, DataCapsuleRequest};
-use capsulelib::{Metadata, SHA256Hashable};
+use capsuleclient::Connection;
+use capsulelib::capsule::{Metadata, SHA256Hashable};
+use capsulelib::requests::DataCapsuleRequest;
 use futures::{executor::LocalPool, future, stream::StreamExt, task::LocalSpawnExt};
 use r2r::QosProfile;
 

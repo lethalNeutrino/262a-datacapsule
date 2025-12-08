@@ -68,7 +68,9 @@ impl Connection {
         let gdp_name = metadata.hash_string();
 
         // Run the publisher in another task
-        let inner_msg = DataCapsuleRequest::Create { gdp_name };
+        let inner_msg = DataCapsuleRequest::Create {
+            metadata: metadata.clone(),
+        };
         let inner_pub = self.chatter.publisher.clone();
         self.pool.spawner().spawn_local(async move {
             let msg = r2r::std_msgs::msg::ByteMultiArray {
