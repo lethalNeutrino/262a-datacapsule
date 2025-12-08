@@ -3,6 +3,7 @@ mod capsule;
 use std::path::Path;
 
 use anyhow::Result;
+use capsule::{NetworkCapsuleReader, NetworkCapsuleWriter};
 use capsulelib::capsule::structs::{Capsule, Metadata, SHA256Hashable};
 use capsulelib::requests::DataCapsuleRequest;
 use ed25519_dalek::SigningKey;
