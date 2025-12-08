@@ -12,6 +12,9 @@ pub enum DataCapsuleRequest {
         capsule_name: String,
         record: Record,
     },
+    Get {
+        capsule_name: String,
+    },
     Read {
         capsule_name: String,
         header_hash: Vec<u8>,
@@ -20,4 +23,10 @@ pub enum DataCapsuleRequest {
     AppendAck {
         header_hash: String,
     },
+    GetResponse {
+        metadata: Metadata,
+        heartbeat: RecordHeartbeat,
+        header: RecordHeader,
+    },
+    ReadResponse,
 }

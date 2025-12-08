@@ -7,7 +7,8 @@ use capsule::{NetworkCapsuleReader, NetworkCapsuleWriter};
 use capsulelib::capsule::structs::{Capsule, Metadata, SHA256Hashable};
 use capsulelib::requests::DataCapsuleRequest;
 use ed25519_dalek::SigningKey;
-use futures::{Stream, executor::LocalPool, task::LocalSpawnExt};
+use futures::future;
+use futures::{Stream, StreamExt, executor::LocalPool, task::LocalSpawnExt};
 use r2r::{Publisher, QosProfile};
 use serde::{Deserialize, Serialize};
 
@@ -94,6 +95,61 @@ impl Connection {
                 subscriber: Box::new(subscriber),
                 publisher,
             },
+        })
+    }
+
+    pub fn get(&mut self, gdp_name: String) -> Result<NetworkCapsuleReader> {
+        let subscriber = self.node.subscribe::<r2r::std_msgs::msg::String>(
+            &format!("/capsule_{}/client", gdp_name),
+            QosProfile::default(),
+        )?;
+        let publisher = self.node.create_publisher::<r2r::std_msgs::msg::String>(
+            &format!("/capsule_{}/server", gdp_name),
+            QosProfile::default(),
+        )?;
+
+        let request = DataCapsuleRequest::Get {
+            capsule_name: gdp_name.clone(),
+        };
+        let msg = r2r::std_msgs::msg::String {
+            data: serde_json::to_string(&request).unwrap(),
+        };
+
+        self.chatter.publisher.publish(&msg)?;
+
+        self.pool.spawner().spawn_local(async move {
+            subscriber
+                .for_each(|msg| {
+                    match serde_json::from_str::<DataCapsuleRequest>(&msg.data) {
+                        Ok(DataCapsuleRequest::GetResponse {
+                            metadata,
+                            header,
+                            heartbeat,
+                        }) => {
+                            println!(
+                                "got response back metadata: {:?}, header: {:?}, heartbeat: {:?}",
+                                metadata, header, heartbeat
+                            );
+                        }
+                        Err(e) => {
+                            println!("It's bwoken: {}", e);
+                        }
+                        _ => {
+                            println!("not yet implemented");
+                        }
+                    };
+                    future::ready(())
+                })
+                .await
+        })?;
+
+        Ok(NetworkCapsuleReader {
+            connection: Topic {
+                name: gdp_name,
+                subscriber: Box::new(subscriber),
+                publisher,
+            },
+            local_capsule: Capsule::default(),
         })
     }
 }
