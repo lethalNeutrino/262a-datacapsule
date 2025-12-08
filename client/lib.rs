@@ -19,8 +19,8 @@ pub struct Topic
 //     P: WrappedTypesupport + 'static,
 {
     pub name: String,
-    pub subscriber: Box<dyn Stream<Item = r2r::std_msgs::msg::ByteMultiArray> + Unpin>,
-    pub publisher: Publisher<r2r::std_msgs::msg::ByteMultiArray>,
+    pub subscriber: Box<dyn Stream<Item = r2r::std_msgs::msg::String> + Unpin>,
+    pub publisher: Publisher<r2r::std_msgs::msg::String>,
 }
 
 impl Connection {
@@ -28,11 +28,9 @@ impl Connection {
     pub fn new() -> Result<Self> {
         let ctx = r2r::Context::create()?;
         let mut node = r2r::Node::create(ctx.clone(), "node", "namespace")?;
-        let subscriber = node.subscribe::<r2r::std_msgs::msg::ByteMultiArray>(
-            "/chatter/client",
-            QosProfile::default(),
-        )?;
-        let publisher = node.create_publisher::<r2r::std_msgs::msg::ByteMultiArray>(
+        let subscriber =
+            node.subscribe::<r2r::std_msgs::msg::String>("/chatter/client", QosProfile::default())?;
+        let publisher = node.create_publisher::<r2r::std_msgs::msg::String>(
             "/chatter/server",
             QosProfile::default(),
         )?;
@@ -54,16 +52,14 @@ impl Connection {
     //     S: WrappedTypesupport + 'static,
     //     P: WrappedTypesupport + 'static,
     {
-        let subscriber = self.node.subscribe::<r2r::std_msgs::msg::ByteMultiArray>(
+        let subscriber = self.node.subscribe::<r2r::std_msgs::msg::String>(
             &format!("/capsule_{}/client", metadata.hash_string()),
             QosProfile::default(),
         )?;
-        let publisher = self
-            .node
-            .create_publisher::<r2r::std_msgs::msg::ByteMultiArray>(
-                &format!("/capsule_{}/server", metadata.hash_string()),
-                QosProfile::default(),
-            )?;
+        let publisher = self.node.create_publisher::<r2r::std_msgs::msg::String>(
+            &format!("/capsule_{}/server", metadata.hash_string()),
+            QosProfile::default(),
+        )?;
 
         let gdp_name = metadata.hash_string();
 
@@ -73,9 +69,8 @@ impl Connection {
         };
         let inner_pub = self.chatter.publisher.clone();
         self.pool.spawner().spawn_local(async move {
-            let msg = r2r::std_msgs::msg::ByteMultiArray {
-                data: serde_json::to_vec(&inner_msg).unwrap(),
-                ..Default::default()
+            let msg = r2r::std_msgs::msg::String {
+                data: serde_json::to_string(&inner_msg).unwrap(),
             };
             inner_pub.publish(&msg).unwrap();
         })?;
