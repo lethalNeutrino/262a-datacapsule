@@ -1,15 +1,11 @@
 mod capsule;
 
 use anyhow::Result;
-use capsulelib::{Metadata, SHA256Hashable};
+use capsulelib::capsule::{Metadata, SHA256Hashable};
+use capsulelib::requests::DataCapsuleRequest;
 use futures::{Stream, executor::LocalPool, task::LocalSpawnExt};
 use r2r::{Publisher, QosProfile};
 use serde::{Deserialize, Serialize};
-
-#[derive(Serialize, Deserialize)]
-enum DataCapsuleRequest {
-    Create { gdp_name: String },
-}
 
 pub struct Connection {
     pub ctx: r2r::Context,

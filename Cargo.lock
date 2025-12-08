@@ -317,8 +317,11 @@ dependencies = [
 name = "datacapsule-server"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "datacapsule-capsulelib",
  "futures",
  "r2r",
+ "serde_json",
 ]
 
 [[package]]

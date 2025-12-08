@@ -1,5 +1,5 @@
 use crate::Topic;
-use capsulelib::Capsule;
+use capsulelib::capsule::Capsule;
 
 struct NetworkCapsuleWriter
 // where
