@@ -1,14 +1,41 @@
+use std::collections::HashMap;
+
 use anyhow::Result;
-use capsulelib::capsule::{
+use capsulelib::capsule::structs::{
     Capsule, Metadata, Record, RecordHeader, RecordHeartbeat, SHA256Hashable,
 };
 use capsulelib::requests::DataCapsuleRequest;
-use futures::{executor::LocalPool, future, stream::StreamExt, task::LocalSpawnExt};
+use futures::{Stream, executor::LocalPool, future, stream::StreamExt, task::LocalSpawnExt};
 use log::{debug, info};
-use r2r::Context;
-use r2r::QosProfile;
+use r2r::{Context, Node};
+use r2r::{Publisher, QosProfile};
+
+/// TODO: REFACTOR THIS INTO NETWORK LIB
+pub struct Connection {
+    pub ctx: r2r::Context,
+    pub node: r2r::Node,
+    pub pool: LocalPool,
+    pub chatter: Topic,
+}
+
+pub struct Topic {
+    pub name: String,
+    pub subscriber: Box<dyn Stream<Item = r2r::std_msgs::msg::String> + Unpin>,
+    pub publisher: Publisher<r2r::std_msgs::msg::String>,
+}
+
+struct NetworkCapsuleWriter {
+    connection: Topic,
+    local_capsule: Capsule,
+}
+
+struct NetworkCapsuleReader {
+    connection: Topic,
+    local_capsule: Capsule,
+}
 
 fn handle_create(
+    node: &mut Node,
     metadata: Metadata,
     heartbeat: RecordHeartbeat,
     header: RecordHeader,
@@ -39,8 +66,21 @@ fn handle_create(
         key_str.into_bytes()
     };
     */
-    Capsule::open(gdp_name, metadata, heartbeat, header, symmetric_key);
+
+    let capsule_topic = Topic {
+        name: gdp_name.clone(),
+        subscriber: Box::new(node.subscribe::<r2r::std_msgs::msg::String>(
+            &format!("/capsule_{}/server", metadata.hash_string()),
+            QosProfile::default(),
+        )?),
+        publisher: node.create_publisher::<r2r::std_msgs::msg::String>(
+            &format!("/capsule_{}/client", metadata.hash_string()),
+            QosProfile::default(),
+        )?,
+    };
+
     info!("capsule created!");
+    Capsule::open(gdp_name.clone(), metadata, header, heartbeat, symmetric_key)
 }
 
 fn handle_append(capsule_name: String, record: Record) -> Result<()> {
@@ -57,14 +97,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ctx = r2r::Context::create()?;
     let mut node = r2r::Node::create(ctx, "node", "namespace")?;
     let subscriber =
-        node.subscribe::<r2r::std_msgs::msg::String>("/chatter", QosProfile::default())?;
-    let publisher =
-        node.create_publisher::<r2r::std_msgs::msg::String>("/chatter", QosProfile::default())?;
+        node.subscribe::<r2r::std_msgs::msg::String>("/chatter/server", QosProfile::default())?;
+    let publisher = node
+        .create_publisher::<r2r::std_msgs::msg::String>("/chatter/client", QosProfile::default())?;
     let mut timer = node.create_wall_timer(std::time::Duration::from_millis(1000))?;
 
     // Set up a simple task executor.
     let mut pool = LocalPool::new();
     let spawner = pool.spawner();
+    // let mut topics: HashMap<String, Topic> = HashMap::new();
+    // topics.insert(
+    //     "chatter".to_string(),
+    //     Topic {
+    //         name: "chatter".to_string(),
+    //         subscriber: Box::new(subscriber),
+    //         publisher,
+    //     },
+    // );
 
     // Run the subscriber in one task, printing the messages
     spawner.spawn_local(async move {
@@ -76,7 +125,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         heartbeat,
                         header,
                     }) => {
-                        handle_create(metadata, heartbeat, header).expect("creation failed!");
+                        handle_create(&mut node, metadata, heartbeat, header)
+                            .expect("creation failed!");
                         println!("Capsule created!");
                     }
                     Ok(DataCapsuleRequest::Append {
@@ -95,9 +145,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     Err(e) => {
                         println!("It's bwoken: {}", e);
-                    }
-                    _ => {
-                        println!("got new msg: {:?}", msg.data);
                     }
                 };
                 future::ready(())

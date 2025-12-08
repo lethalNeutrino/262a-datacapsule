@@ -321,6 +321,7 @@ dependencies = [
  "anyhow",
  "datacapsule-capsulelib",
  "futures",
+ "log",
  "r2r",
  "serde_json",
 ]
@@ -345,6 +346,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "datacapsule-capsulelib",
+ "ed25519-dalek",
  "futures",
  "r2r",
  "serde",

@@ -14,3 +14,4 @@ futures = "0.3.31"
 r2r = "0.9.5"
 serde_json = "1.0.145"
 serde = { version = "1.0.228", features = ["derive"] }
+ed25519-dalek = "2.2.0"

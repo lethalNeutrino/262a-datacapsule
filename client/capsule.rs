@@ -1,20 +1,12 @@
 use crate::Topic;
-use capsulelib::capsule::Capsule;
+use capsulelib::capsule::structs::Capsule;
 
-struct NetworkCapsuleWriter
-// where
-//     S: WrappedTypesupport + 'static,
-//     P: WrappedTypesupport + 'static,
-{
+struct NetworkCapsuleWriter {
     connection: Topic,
     local_capsule: Capsule,
 }
 
-struct NetworkCapsuleReader
-// where
-//     S: WrappedTypesupport + 'static,
-//     P: WrappedTypesupport + 'static
-{
+struct NetworkCapsuleReader {
     connection: Topic,
     local_capsule: Capsule,
 }

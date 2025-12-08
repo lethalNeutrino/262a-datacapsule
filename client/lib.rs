@@ -1,8 +1,11 @@
 mod capsule;
 
+use std::path::Path;
+
 use anyhow::Result;
-use capsulelib::capsule::{Metadata, SHA256Hashable};
+use capsulelib::capsule::structs::{Capsule, Metadata, SHA256Hashable};
 use capsulelib::requests::DataCapsuleRequest;
+use ed25519_dalek::SigningKey;
 use futures::{Stream, executor::LocalPool, task::LocalSpawnExt};
 use r2r::{Publisher, QosProfile};
 use serde::{Deserialize, Serialize};
@@ -14,10 +17,7 @@ pub struct Connection {
     pub chatter: Topic,
 }
 
-pub struct Topic
-//     S: WrappedTypesupport + 'static,
-//     P: WrappedTypesupport + 'static,
-{
+pub struct Topic {
     pub name: String,
     pub subscriber: Box<dyn Stream<Item = r2r::std_msgs::msg::String> + Unpin>,
     pub publisher: Publisher<r2r::std_msgs::msg::String>,
@@ -47,11 +47,13 @@ impl Connection {
         })
     }
 
-    pub fn create(&mut self, metadata: Metadata) -> Result<Topic>
-// where
-    //     S: WrappedTypesupport + 'static,
-    //     P: WrappedTypesupport + 'static,
-    {
+    pub fn create<P: AsRef<Path>>(
+        &mut self,
+        kv_store_path: P,
+        metadata: Metadata,
+        signing_key: SigningKey,
+        symmetric_key: Vec<u8>,
+    ) -> Result<Topic> {
         let subscriber = self.node.subscribe::<r2r::std_msgs::msg::String>(
             &format!("/capsule_{}/client", metadata.hash_string()),
             QosProfile::default(),
@@ -63,10 +65,17 @@ impl Connection {
 
         let gdp_name = metadata.hash_string();
 
+        let local_capsule =
+            Capsule::create(kv_store_path, metadata.clone(), signing_key, symmetric_key)?;
+        let metadata_record = local_capsule.peek()?;
+
         // Run the publisher in another task
         let inner_msg = DataCapsuleRequest::Create {
             metadata: metadata.clone(),
+            header: metadata_record.header,
+            heartbeat: metadata_record.heartbeat.unwrap(),
         };
+
         let inner_pub = self.chatter.publisher.clone();
         self.pool.spawner().spawn_local(async move {
             let msg = r2r::std_msgs::msg::String {
