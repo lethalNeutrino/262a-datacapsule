@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use anyhow::Result;
 use capsulelib::capsule::structs::{
@@ -34,8 +36,10 @@ struct NetworkCapsuleReader {
     local_capsule: Capsule,
 }
 
+/// Updated to take a shared, mutable reference to the `Node` so it can be
+/// called from both the main loop and the spawned task.
 fn handle_create(
-    node: &mut Node,
+    node_rc: &Rc<RefCell<Node>>,
     metadata: Metadata,
     heartbeat: RecordHeartbeat,
     header: RecordHeader,
@@ -48,24 +52,11 @@ fn handle_create(
         Err(_) => return Err(anyhow::anyhow!("environment variable {} not set", key_var)),
     };
 
-    // Try to interpret the environment variable as hex if it looks like hex,
-    // otherwise fall back to the raw bytes of the string.
-    // TODO INSECURE ATM use a fixed key for testing for easier test deployments.
+    // For now use a dummy symmetric key for testing.
     let symmetric_key: Vec<u8> = (0..16).collect::<Vec<u8>>();
-    /*
-    if key_str.len() % 2 == 0 && key_str.chars().all(|c| c.is_ascii_hexdigit()) {
-        let mut v = Vec::with_capacity(key_str.len() / 2);
-        for i in (0..key_str.len()).step_by(2) {
-            // We validated ASCII hex digits above, so slicing by byte indices is safe.
-            let byte = u8::from_str_radix(&key_str[i..i + 2], 16)
-                .map_err(|e| anyhow::anyhow!("invalid hex in {}: {}", key_var, e))?;
-            v.push(byte);
-        }
-        v
-    } else {
-        key_str.into_bytes()
-    };
-    */
+
+    // Borrow the node mutably only for the duration of creating the subscriber/publisher.
+    let mut node = node_rc.borrow_mut();
 
     let capsule_topic = Topic {
         name: gdp_name.clone(),
@@ -78,6 +69,8 @@ fn handle_create(
             QosProfile::default(),
         )?,
     };
+
+    // At this point `node` mutable borrow is dropped when `node` goes out of scope.
 
     info!("capsule created!");
     Capsule::open(gdp_name.clone(), metadata, header, heartbeat, symmetric_key)
@@ -94,57 +87,84 @@ fn handle_read(capsule_name: String, header: Vec<u8>) -> Result<Vec<u8>> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Create the ROS2 context and node as before.
     let ctx = r2r::Context::create()?;
-    let mut node = r2r::Node::create(ctx, "node", "namespace")?;
-    let subscriber =
-        node.subscribe::<r2r::std_msgs::msg::String>("/chatter/server", QosProfile::default())?;
-    let publisher = node
-        .create_publisher::<r2r::std_msgs::msg::String>("/chatter/client", QosProfile::default())?;
-    let mut timer = node.create_wall_timer(std::time::Duration::from_millis(1000))?;
+    let node = r2r::Node::create(ctx, "node", "namespace")?;
+
+    // Wrap the node in an Rc<RefCell<_>> so it can be shared between the main
+    // loop and the spawned local task.
+    let node_rc = Rc::new(RefCell::new(node));
+
+    // Create the initial subscriber, publisher and timer using a temporary mutable borrow.
+    let subscriber = {
+        let mut node_borrow = node_rc.borrow_mut();
+        node_borrow
+            .subscribe::<r2r::std_msgs::msg::String>("/chatter/server", QosProfile::default())?
+    };
+    let publisher = {
+        let mut node_borrow = node_rc.borrow_mut();
+        node_borrow.create_publisher::<r2r::std_msgs::msg::String>(
+            "/chatter/client",
+            QosProfile::default(),
+        )?
+    };
+    let mut timer = {
+        let mut node_borrow = node_rc.borrow_mut();
+        node_borrow.create_wall_timer(std::time::Duration::from_millis(1000))?
+    };
 
     // Set up a simple task executor.
     let mut pool = LocalPool::new();
     let spawner = pool.spawner();
-    // let mut topics: HashMap<String, Topic> = HashMap::new();
-    // topics.insert(
-    //     "chatter".to_string(),
-    //     Topic {
-    //         name: "chatter".to_string(),
-    //         subscriber: Box::new(subscriber),
-    //         publisher,
-    //     },
-    // );
 
-    // Run the subscriber in one task, printing the messages
+    // Clone the Rc so the spawned task has access to the same Node.
+    let node_for_task = Rc::clone(&node_rc);
+
+    // Run the subscriber in one task, printing the messages.
     spawner.spawn_local(async move {
         subscriber
             .for_each(|msg| {
+                // Parse the incoming request and call the appropriate handler.
                 match serde_json::from_str::<DataCapsuleRequest>(&msg.data) {
                     Ok(DataCapsuleRequest::Create {
                         metadata,
                         heartbeat,
                         header,
                     }) => {
-                        handle_create(&mut node, metadata, heartbeat, header)
-                            .expect("creation failed!");
-                        println!("Capsule created!");
+                        // Pass the shared node reference to `handle_create`.
+                        match handle_create(&node_for_task, metadata, heartbeat, header) {
+                            Ok(_) => {
+                                println!("Capsule created!");
+                            }
+                            Err(e) => {
+                                eprintln!("creation failed: {}", e);
+                            }
+                        }
                     }
-                    Ok(DataCapsuleRequest::Append {
-                        capsule_name,
-                        record,
-                    }) => {
-                        handle_append(capsule_name, record).expect("append failed!");
-                        println!("Record appended!");
-                    }
-                    Ok(DataCapsuleRequest::Read {
-                        capsule_name,
-                        header_hash,
-                    }) => {
-                        handle_read(capsule_name, header_hash).expect("read failed!");
-                        println!("Capsule read!");
-                    }
+                    // Ok(DataCapsuleRequest::Append {
+                    //     capsule_name,
+                    //     record,
+                    // }) => {
+                    //     if let Err(e) = handle_append(capsule_name, record) {
+                    //         eprintln!("append failed: {}", e);
+                    //     } else {
+                    //         println!("Record appended!");
+                    //     }
+                    // }
+                    // Ok(DataCapsuleRequest::Read {
+                    //     capsule_name,
+                    //     header_hash,
+                    // }) => {
+                    //     match handle_read(capsule_name, header_hash) {
+                    //         Ok(_) => println!("Capsule read!"),
+                    //         Err(e) => eprintln!("read failed: {}", e),
+                    //     };
+                    // }
                     Err(e) => {
                         println!("It's bwoken: {}", e);
+                    }
+                    _ => {
+                        println!("chatter should only be used for create requests; ignoring");
                     }
                 };
                 future::ready(())
@@ -152,9 +172,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await
     })?;
 
-    // Main loop spins ros.
+    // Main loop spins ros and runs the local task pool.
     loop {
-        node.spin_once(std::time::Duration::from_millis(100));
+        // Borrow the node mutably for spinning once. The borrow must be short-lived
+        // so spawned tasks can also borrow it when they run.
+        {
+            let mut node_borrow = node_rc.borrow_mut();
+            node_borrow.spin_once(std::time::Duration::from_millis(100));
+        }
+
+        // Run any pending futures until they stall.
         pool.run_until_stalled();
     }
 }
