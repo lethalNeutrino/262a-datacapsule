@@ -18,7 +18,7 @@ use serde_json;
 impl Capsule {
     pub fn read_unchecked(&self, header_hash: Vec<u8>) -> Result<Record> {
         let record_bytes = self
-            .keyspace
+            .record_partition
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("keyspace partition not opened"))?
             .get(&header_hash)?
@@ -86,7 +86,7 @@ impl Capsule {
     /// Intended for tests/benchmarks to simulate corrupted storage or tampering.
     pub fn overwrite_record(&self, header_hash: Vec<u8>, record: &Record) -> Result<()> {
         let items = self
-            .keyspace
+            .record_partition
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("keyspace partition not opened"))?;
         items.insert(&header_hash, serde_json::to_vec(record)?)?;

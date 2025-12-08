@@ -1,5 +1,6 @@
 use ed25519_dalek::Signature;
 use ed25519_dalek::SigningKey;
+use fjall::Keyspace;
 use fjall::PartitionHandle;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -96,9 +97,10 @@ pub struct Capsule {
     pub sign_key: Option<SigningKey>,
     pub last_seqno: usize,
     pub last_pointer: HashPointer,
-    pub keyspace: Option<PartitionHandle>,
+    pub keyspace: Option<Keyspace>,
+    pub record_partition: Option<PartitionHandle>,
     // Per-capsule heartbeat partition
-    pub heartbeat_keyspace: Option<PartitionHandle>,
+    pub heartbeat_partition: Option<PartitionHandle>,
     // Per-capsule seqno -> header hash partition
-    pub seqno_keyspace: Option<PartitionHandle>,
+    pub seqno_partition: Option<PartitionHandle>,
 }

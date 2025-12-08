@@ -11,7 +11,9 @@ use structs::{
     Capsule, HashPointer, Metadata, Record, RecordHeader, RecordHeartbeat, RecordHeartbeatData,
     SHA256Hashable,
 };
-use utils::{partition_insert, sign_heartbeat_with_key, verify_heartbeat_with_metadata};
+use utils::{
+    init_partitions, partition_insert, sign_heartbeat_with_key, verify_heartbeat_with_metadata,
+};
 
 pub type Aes128Ctr64LE = ctr::Ctr64LE<aes::Aes128>;
 
@@ -37,31 +39,14 @@ impl Capsule {
 
         // Create a partition of the keyspace for a DataCapsule
         let gdp_name: &str = &metadata.hash_string();
-        let items = keyspace.open_partition(
-            gdp_name,
-            PartitionCreateOptions::default().max_memtable_size(64 * 1024 * 1024),
-        )?;
-
-        // Create a separate partition for heartbeats for this capsule. Name it
-        // by appending a suffix to the capsule name to keep it unique.
-        let heartbeat_partition_name = format!("{}-heartbeats", gdp_name);
-        let heartbeat_items = keyspace.open_partition(
-            heartbeat_partition_name.as_str(),
-            PartitionCreateOptions::default().max_memtable_size(32 * 1024 * 1024),
-        )?;
-
-        // Create a separate partition for seqno->header mappings
-        let seqno_partition_name = format!("{}-seqnos", gdp_name);
-        let seqno_items = keyspace.open_partition(
-            seqno_partition_name.as_str(),
-            PartitionCreateOptions::default().max_memtable_size(16 * 1024 * 1024),
-        )?;
+        let (items, heartbeat_items, seqno_items) = init_partitions(&keyspace, gdp_name)?;
 
         Ok(Capsule {
             symmetric_key,
-            keyspace: Some(items),
-            heartbeat_keyspace: Some(heartbeat_items),
-            seqno_keyspace: Some(seqno_items),
+            keyspace: Some(keyspace),
+            record_partition: Some(items),
+            heartbeat_partition: Some(heartbeat_items),
+            seqno_partition: Some(seqno_items),
             last_seqno: 0,
             ..Default::default()
         })
@@ -108,25 +93,7 @@ impl Capsule {
 
         // Create a partition of the keyspace for a DataCapsule
         let gdp_name: &str = &metadata.hash_string();
-        let items = keyspace.open_partition(
-            gdp_name,
-            PartitionCreateOptions::default().max_memtable_size(64 * 1024 * 1024),
-        )?;
-
-        // Create a separate partition for heartbeats for this capsule. Name it
-        // by appending a suffix to the capsule name to keep it unique.
-        let heartbeat_partition_name = format!("{}-heartbeats", gdp_name);
-        let heartbeat_items = keyspace.open_partition(
-            heartbeat_partition_name.as_str(),
-            PartitionCreateOptions::default().max_memtable_size(32 * 1024 * 1024),
-        )?;
-
-        // Create a separate partition for seqno->header mappings
-        let seqno_partition_name = format!("{}-seqnos", gdp_name);
-        let seqno_items = keyspace.open_partition(
-            seqno_partition_name.as_str(),
-            PartitionCreateOptions::default().max_memtable_size(16 * 1024 * 1024),
-        )?;
+        let (items, heartbeat_items, seqno_items) = init_partitions(&keyspace, gdp_name)?;
 
         // Create Header
         let metadata_header = RecordHeader {
@@ -191,9 +158,10 @@ impl Capsule {
             symmetric_key,
             last_seqno: 0,
             last_pointer: (0, metadata_header.hash()),
-            keyspace: Some(items),
-            heartbeat_keyspace: Some(heartbeat_items),
-            seqno_keyspace: Some(seqno_items),
+            keyspace: Some(keyspace),
+            record_partition: Some(items),
+            heartbeat_partition: Some(heartbeat_items),
+            seqno_partition: Some(seqno_items),
         })
     }
 
@@ -249,9 +217,9 @@ impl Capsule {
         let metadata: Metadata = serde_json::from_slice(&body)?;
 
         Ok(Capsule {
-            keyspace: Some(items),
-            heartbeat_keyspace: Some(heartbeat_items),
-            seqno_keyspace: Some(seqno_items),
+            record_partition: Some(items),
+            heartbeat_partition: Some(heartbeat_items),
+            seqno_partition: Some(seqno_items),
             metadata,
             sign_key: Some(sign_key),
             symmetric_key,
@@ -326,7 +294,7 @@ impl Capsule {
             body: data,
         };
 
-        let items = self.keyspace.as_ref().unwrap();
+        let items = self.record_partition.as_ref().unwrap();
 
         // Store the record under the header hash
         partition_insert(items, &header_hash, serde_json::to_vec(&record)?)?;
@@ -345,7 +313,7 @@ impl Capsule {
 
     pub fn read(&self, header_hash: Vec<u8>) -> Result<Record> {
         let record_bytes = self
-            .keyspace
+            .record_partition
             .clone()
             .unwrap()
             .get(&header_hash)

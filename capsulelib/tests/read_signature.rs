@@ -1,6 +1,5 @@
 include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/common.rs"));
 
-use datacapsule_capsulelib::capsule::structs::SHA256Hashable;
 use ed25519_dalek::Signature as DalekSignature;
 
 #[test]
@@ -25,7 +24,7 @@ fn read_rejects_invalid_heartbeat_signature() -> anyhow::Result<()> {
 
     // overwrite the stored record with the tampered one using the public keyspace
     capsule
-        .keyspace
+        .record_partition
         .as_ref()
         .unwrap()
         .insert(&header_hash, serde_json::to_vec(&tampered)?)?;

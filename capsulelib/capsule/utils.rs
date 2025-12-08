@@ -1,6 +1,6 @@
 use super::structs::{Capsule, Metadata, RecordHeartbeat, RecordHeartbeatData, SHA256Hashable};
 use ed25519_dalek::{Signature, Signer, SigningKey};
-use fjall::PartitionHandle;
+use fjall::{Keyspace, Partition, PartitionCreateOptions, PartitionHandle};
 
 use anyhow::{Result, bail};
 
@@ -39,6 +39,33 @@ pub fn verify_heartbeat_with_metadata(
     Ok(())
 }
 
+pub fn init_partitions(
+    keyspace: &Keyspace,
+    gdp_name: &str,
+) -> Result<(Partition, Partition, Partition)> {
+    let items = keyspace.open_partition(
+        gdp_name,
+        PartitionCreateOptions::default().max_memtable_size(64 * 1024 * 1024),
+    )?;
+
+    // Create a separate partition for heartbeats for this capsule. Name it
+    // by appending a suffix to the capsule name to keep it unique.
+    let heartbeat_partition_name = format!("{}-heartbeats", gdp_name);
+    let heartbeat_items = keyspace.open_partition(
+        heartbeat_partition_name.as_str(),
+        PartitionCreateOptions::default().max_memtable_size(32 * 1024 * 1024),
+    )?;
+
+    // Create a separate partition for seqno->header mappings
+    let seqno_partition_name = format!("{}-seqnos", gdp_name);
+    let seqno_items = keyspace.open_partition(
+        seqno_partition_name.as_str(),
+        PartitionCreateOptions::default().max_memtable_size(16 * 1024 * 1024),
+    )?;
+
+    Ok((items, heartbeat_items, seqno_items))
+}
+
 /// Lightweight helper for inserting into a partition handle (centralized for clarity).
 pub fn partition_insert(part: &PartitionHandle, key: &[u8], value: Vec<u8>) -> Result<()> {
     part.insert(key, value)?;
@@ -72,7 +99,7 @@ impl Capsule {
     /// Read heartbeat stored in the heartbeat partition by header hash.
     pub fn read_heartbeat(&self, header_hash: Vec<u8>) -> Result<RecordHeartbeat> {
         let hb_bytes = self
-            .heartbeat_keyspace
+            .heartbeat_partition
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("heartbeat partition not opened"))?
             .get(&header_hash)?
@@ -84,7 +111,7 @@ impl Capsule {
     /// Return the header hash stored for the given seqno (persistent mapping).
     pub fn get_header_hash_for_seqno(&self, seqno: usize) -> Result<Vec<u8>> {
         let seq_space = self
-            .seqno_keyspace
+            .seqno_partition
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("seqno partition not opened"))?;
         let key = seqno.to_be_bytes().to_vec();
@@ -97,7 +124,7 @@ impl Capsule {
     /// Store (seqno -> header_hash) mapping into the seqno partition.
     pub fn put_header_hash_for_seqno(&self, seqno: usize, header_hash: Vec<u8>) -> Result<()> {
         let seq_space = self
-            .seqno_keyspace
+            .seqno_partition
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("seqno partition not opened"))?;
         let key = seqno.to_be_bytes().to_vec();
@@ -107,7 +134,7 @@ impl Capsule {
 
     // Helper: insert heartbeat into heartbeat partition if opened.
     pub fn insert_into_heartbeat_partition_opt(&self, key: &[u8], value: Vec<u8>) -> Result<()> {
-        if let Some(hb_space) = &self.heartbeat_keyspace {
+        if let Some(hb_space) = &self.heartbeat_partition {
             partition_insert(hb_space, key, value)?;
         }
         Ok(())
@@ -119,7 +146,7 @@ impl Capsule {
         seqno: usize,
         header_hash: Vec<u8>,
     ) -> Result<()> {
-        if let Some(seq_space) = &self.seqno_keyspace {
+        if let Some(seq_space) = &self.seqno_partition {
             let key = seqno.to_be_bytes().to_vec();
             partition_insert(seq_space, &key, header_hash)?;
         }
