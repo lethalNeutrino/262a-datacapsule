@@ -32,7 +32,10 @@ fn read_rejects_invalid_heartbeat_signature() -> anyhow::Result<()> {
 
     // Now reading that header should fail due to invalid heartbeat signature
     let res = capsule.read(header_hash.clone());
-    assert!(res.is_err(), "read should reject record with invalid heartbeat signature");
+    assert!(
+        res.is_err(),
+        "read should reject record with invalid heartbeat signature"
+    );
 
     Ok(())
 }

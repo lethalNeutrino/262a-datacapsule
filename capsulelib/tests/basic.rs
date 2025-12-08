@@ -61,7 +61,10 @@ fn tampered_heartbeat_signature_is_rejected() -> anyhow::Result<()> {
 
     // Calling place with tampered heartbeat should fail signature verification
     let res = capsule.place(header, heartbeat, vec![]);
-    assert!(res.is_err(), "tampered heartbeat signature should be rejected");
+    assert!(
+        res.is_err(),
+        "tampered heartbeat signature should be rejected"
+    );
 
     Ok(())
 }
@@ -92,11 +95,17 @@ fn read_unchecked_allows_tampered_record() -> anyhow::Result<()> {
 
     // Normal read should now reject due to signature verification
     let res_checked = capsule.read(header_hash.clone());
-    assert!(res_checked.is_err(), "checked read should reject tampered heartbeat");
+    assert!(
+        res_checked.is_err(),
+        "checked read should reject tampered heartbeat"
+    );
 
     // But read_unchecked should succeed (skips signature verification)
     let res_unchecked = capsule.read_unchecked(header_hash.clone());
-    assert!(res_unchecked.is_ok(), "read_unchecked should return record despite tampered signature");
+    assert!(
+        res_unchecked.is_ok(),
+        "read_unchecked should return record despite tampered signature"
+    );
     let rec_unchecked = res_unchecked.unwrap();
     assert_eq!(rec_unchecked.header.hash(), header_hash);
 
@@ -125,15 +134,24 @@ fn place_unchecked_allows_inserting_tampered_heartbeat() -> anyhow::Result<()> {
 
     // Using place (checked) should reject the tampered heartbeat
     let res_checked = capsule.place(header.clone(), tampered_hb.clone(), vec![]);
-    assert!(res_checked.is_err(), "place should reject tampered heartbeat");
+    assert!(
+        res_checked.is_err(),
+        "place should reject tampered heartbeat"
+    );
 
     // But place_unchecked should allow inserting the tampered heartbeat into heartbeat partition
     let res_unchecked = capsule.place_unchecked(header.clone(), tampered_hb.clone(), vec![]);
-    assert!(res_unchecked.is_ok(), "place_unchecked should allow tampered heartbeat");
+    assert!(
+        res_unchecked.is_ok(),
+        "place_unchecked should allow tampered heartbeat"
+    );
 
     // And read_heartbeat should now return the tampered heartbeat from the heartbeat partition
     let hb_read = capsule.read_heartbeat(header_hash.clone())?;
-    assert_eq!(serde_json::to_vec(&hb_read)?, serde_json::to_vec(&tampered_hb)?);
+    assert_eq!(
+        serde_json::to_vec(&hb_read)?,
+        serde_json::to_vec(&tampered_hb)?
+    );
 
     Ok(())
 }

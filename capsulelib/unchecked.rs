@@ -10,8 +10,8 @@
 // behind the `unchecked` feature gate.
 
 use super::*;
-use serde_json;
 use anyhow::{Result, bail};
+use serde_json;
 
 /// Read a record without verifying heartbeat signatures. Intended for benchmarks
 /// or debugging where signature checks should be skipped.

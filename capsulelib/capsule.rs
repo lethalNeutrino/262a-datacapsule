@@ -154,8 +154,6 @@ impl Capsule {
         Ok(())
     }
 
-
-
     pub fn create<P: AsRef<Path>>(
         kv_store_path: P,
         metadata: Metadata,
@@ -235,7 +233,10 @@ impl Capsule {
         // Store metadata record in the capsule partition under the metadata header hash key,
         // and also store the heartbeat in the heartbeat partition under the same key.
         items.insert(&metadata_header_hash, serde_json::to_vec(&metadata_record)?)?;
-        heartbeat_items.insert(&metadata_header_hash, serde_json::to_vec(&metadata_heartbeat)?)?;
+        heartbeat_items.insert(
+            &metadata_header_hash,
+            serde_json::to_vec(&metadata_heartbeat)?,
+        )?;
 
         // Store seqno -> header mapping for seqno 0
         let seq0_key = 0usize.to_be_bytes().to_vec();
