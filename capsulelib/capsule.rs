@@ -448,6 +448,29 @@ impl Capsule {
                 .collect::<String>()
         );
 
+        // Verify heartbeat signature (if present) using the capsule's stored verify_key.
+        if let Some(hb) = &record.heartbeat {
+            // Ensure metadata contains the verify key
+            let vk_bytes = self
+                .metadata
+                .0
+                .get("verify_key")
+                .ok_or_else(|| anyhow::anyhow!("metadata must contain 'verify_key'"))?;
+
+            // Construct a VerifyingKey from the stored bytes (ensure it's 32 bytes)
+            let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(
+                &vk_bytes.as_slice().try_into().map_err(|_| anyhow::anyhow!("verify_key must be 32 bytes"))?
+            )?;
+
+            // Serialize the heartbeat data to the same form that was signed
+            let msg = serde_json::to_vec(&hb.data)?;
+
+            // Verify the signature on the heartbeat.data
+            if let Err(e) = ed25519_dalek::Verifier::verify(&verifying_key, &msg, &hb.signature) {
+                bail!("invalid heartbeat signature: {}", e);
+            }
+        }
+
         Ok(record)
     }
 
@@ -489,5 +512,62 @@ impl Capsule {
 
     pub fn peek(&self) -> Result<Record> {
         self.read(self.last_pointer.1.clone())
+    }
+}
+
+#[cfg(test)]
+mod read_signature_tests {
+    use super::*;
+    use ed25519_dalek::SigningKey;
+    use std::collections::BTreeMap;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn read_rejects_invalid_heartbeat_signature() -> anyhow::Result<()> {
+        // unique store path per test run
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+        let mut store_path = std::env::temp_dir();
+        store_path.push(format!("datacapsule_read_sig_test_{}", nanos));
+        let kv_store = store_path.as_path();
+
+        // create signing key and metadata
+        let seed = [13u8; 32];
+        let signing_key = SigningKey::from_bytes(&seed);
+        let vk = signing_key.verifying_key();
+        let mut md = BTreeMap::new();
+        md.insert(String::from("verify_key"), vk.to_bytes().to_vec());
+        let metadata = Metadata(md);
+
+        let symmetric_key = (0..16).collect::<Vec<u8>>();
+
+        // create capsule
+        let mut capsule = Capsule::create(kv_store, metadata, signing_key, symmetric_key.clone())?;
+
+        // append one record
+        let header_hash = capsule.append(vec![], b"payload-for-signature-test".to_vec())?;
+
+        // read the record and tamper the heartbeat signature in-place in the store
+        let rec = capsule.read(header_hash.clone())?;
+        let mut tampered = rec.clone();
+
+        if let Some(ref mut hb) = tampered.heartbeat {
+            let mut sig_bytes = hb.signature.to_bytes();
+            sig_bytes[0] ^= 0x01; // flip a bit
+            let arr: [u8; 64] = sig_bytes.as_slice().try_into().unwrap();
+            hb.signature = ed25519_dalek::Signature::from_bytes(&arr);
+        }
+
+        // overwrite the stored record with the tampered one
+        capsule
+            .keyspace
+            .as_ref()
+            .unwrap()
+            .insert(&header_hash, serde_json::to_vec(&tampered)?)?;
+
+        // Now reading that header should fail due to invalid heartbeat signature
+        let res = capsule.read(header_hash.clone());
+        assert!(res.is_err(), "read should reject record with invalid heartbeat signature");
+
+        Ok(())
     }
 }
