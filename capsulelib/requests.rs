@@ -1,4 +1,4 @@
-use crate::capsule::{Metadata, RecordHeader, RecordHeartbeat};
+use crate::capsule::{Metadata, RecordHeader, RecordHeartbeat, Record};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
@@ -6,7 +6,7 @@ pub enum DataCapsuleRequest {
     Create {
         metadata: Metadata,
         heartbeat: RecordHeartbeat,
-        header: RecordHeartbeat,
+        header: RecordHeader,
     },
     Append {
         capsule_name: String,
@@ -14,6 +14,6 @@ pub enum DataCapsuleRequest {
     },
     Read {
         capsule_name: String,
-        header_hash: String,
+        header_hash: Vec<u8>,
     },
 }

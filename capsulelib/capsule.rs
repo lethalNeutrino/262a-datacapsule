@@ -6,7 +6,6 @@ use fjall::{PartitionCreateOptions, PersistMode};
 use log::debug;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::io::Read;
 use std::{collections::BTreeMap, path::Path};
 
 type Aes128Ctr64LE = ctr::Ctr64LE<aes::Aes128>;
@@ -104,6 +103,8 @@ pub struct Capsule {
     last_seqno: usize,
     last_pointer: HashPointer,
     keyspace: Option<PartitionHandle>,
+    // Per-capsule heartbeat partition
+    heartbeat_keyspace: Option<PartitionHandle>,
 }
 
 impl Capsule {
@@ -125,8 +126,10 @@ impl Capsule {
             .get("verify_key")
             .ok_or_else(|| anyhow::anyhow!("metadata must contain 'verify_key'"))?;
 
-        // Construct a VerifyingKey from the stored bytes
-        let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(vk_bytes.as_slice())?;
+        // Construct a VerifyingKey from the stored bytes (ensure it's 32 bytes)
+        let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(
+            &vk_bytes.as_slice().try_into().map_err(|_| anyhow::anyhow!("verify_key must be 32 bytes"))?
+        )?;
 
         // Serialize the heartbeat data to the same form that was signed
         let msg = serde_json::to_vec(&heartbeat.data)?;
@@ -135,6 +138,13 @@ impl Capsule {
         if let Err(e) = ed25519_dalek::Verifier::verify(&verifying_key, &msg, &heartbeat.signature)
         {
             bail!("invalid heartbeat signature: {}", e);
+        }
+
+        // Insert heartbeat into the per-capsule heartbeat partition at the same key
+        // used for the record (hash of header)
+        if let Some(hb_space) = &self.heartbeat_keyspace {
+            let header_hash = header.hash();
+            hb_space.insert(&header_hash, serde_json::to_vec(&heartbeat)?)?;
         }
 
         Ok(())
@@ -153,8 +163,6 @@ impl Capsule {
         let keyspace = Config::new(&kv_store_path)
             .max_write_buffer_size(128 * 1024 * 1024)
             .open()?;
-        // keyspace.set_max_memtable_size(32 * 1_024 * 1_024);
-        // Config::new().
         keyspace.persist(PersistMode::SyncAll)?;
 
         // Create a partition of the keyspace for a DataCapsule
@@ -162,6 +170,14 @@ impl Capsule {
         let items = keyspace.open_partition(
             gdp_name,
             PartitionCreateOptions::default().max_memtable_size(64 * 1024 * 1024),
+        )?;
+
+        // Create a separate partition for heartbeats for this capsule. Name it
+        // by appending a suffix to the capsule name to keep it unique.
+        let heartbeat_partition_name = format!("{}-heartbeats", gdp_name);
+        let heartbeat_items = keyspace.open_partition(
+            heartbeat_partition_name.as_str(),
+            PartitionCreateOptions::default().max_memtable_size(32 * 1024 * 1024),
         )?;
 
         // Create Header
@@ -178,7 +194,7 @@ impl Capsule {
         let metadata_heartbeat_data = RecordHeartbeatData {
             seqno: 0,
             gdp_name: gdp_name.to_string(),
-            header_hash: metadata_header_hash,
+            header_hash: metadata_header_hash.clone(),
         };
 
         // Sign the metadata heartbeat
@@ -199,11 +215,19 @@ impl Capsule {
         // Create initial record + insert into Fjall
         let metadata_record = Record {
             header: metadata_header.clone(),
-            heartbeat: Some(metadata_heartbeat),
+            heartbeat: Some(metadata_heartbeat.clone()),
             body: metadata_bytes,
         };
 
+        // Store metadata record in the capsule partition under the capsule name key,
+        // and also store the heartbeat in the heartbeat partition under the same key.
+        // Additionally store both under the metadata header hash so they can be looked
+        // up by header hash as well.
         items.insert(gdp_name, serde_json::to_vec(&metadata_record)?)?;
+        heartbeat_items.insert(gdp_name, serde_json::to_vec(&metadata_heartbeat)?)?;
+        // also store under metadata header hash
+        items.insert(&metadata_header_hash, serde_json::to_vec(&metadata_record)?)?;
+        heartbeat_items.insert(&metadata_header_hash, serde_json::to_vec(&metadata_heartbeat)?)?;
 
         // Return created capsule
         Ok(Capsule {
@@ -212,6 +236,7 @@ impl Capsule {
             symmetric_key,
             last_pointer: (0, metadata_header.hash()),
             keyspace: Some(items),
+            heartbeat_keyspace: Some(heartbeat_items),
             ..Default::default()
         })
     }
@@ -225,22 +250,25 @@ impl Capsule {
         let keyspace = Config::new(&kv_store_path)
             .max_write_buffer_size(128 * 1024 * 1024)
             .open()?;
-        // keyspace.set_max_memtable_size(32 * 1_024 * 1_024);
-        // Config::new().
         keyspace.persist(PersistMode::SyncAll)?;
 
-        // Create a partition of the keyspace for a DataCapsule
-        // let gdp_name: &str = &metadata.hash_string();
+        // Open capsule partition
         let items = keyspace.open_partition(
             gdp_name.as_str(),
             PartitionCreateOptions::default().max_memtable_size(64 * 1024 * 1024),
         )?;
 
+        // Open corresponding heartbeat partition for this capsule
+        let heartbeat_partition_name = format!("{}-heartbeats", gdp_name.as_str());
+        let heartbeat_items = keyspace.open_partition(
+            heartbeat_partition_name.as_str(),
+            PartitionCreateOptions::default().max_memtable_size(32 * 1024 * 1024),
+        )?;
+
+        // Read the metadata record to reconstruct capsule metadata
         let record_data = items.get(gdp_name)?.unwrap();
         let record: Record = serde_json::from_slice(&record_data)?;
 
-        let header = record.header;
-        let heartbeat = record.heartbeat;
         let mut body = record.body;
 
         let iv = [0x0; 16];
@@ -249,27 +277,14 @@ impl Capsule {
 
         let metadata: Metadata = serde_json::from_slice(&body)?;
 
-        let caps = Capsule {
-            metadata: metadata.clone(),
+        Ok(Capsule {
+            keyspace: Some(items),
+            heartbeat_keyspace: Some(heartbeat_items),
+            metadata,
             sign_key: Some(sign_key),
-            symmetric_key: symmetric_key.clone(),
-            // metadata: metadata.clone(),
-            // symmetric_key,
+            symmetric_key,
             ..Default::default()
-        };
-        // // Create Header
-
-        // let keyspace = Config::new(kv_store_path).open()?;
-        // let items = keyspace.open_partition(&gdp_name, PartitionCreateOptions::default())?;
-        // let metadata_bytes_vec = items
-        //     .get(&gdp_name)?
-        //     .expect("The GDP name provided does not map to a capsule in the provided database.")
-        //     .to_vec();
-
-        // let metadata_bytes = metadata_bytes_vec.as_slice();
-        // let metadata: BTreeMap<String, Vec<u8>> = serde_json::from_slice(metadata_bytes)?;
-
-        Ok(caps)
+        })
     }
 
     pub fn append(&mut self, hash_ptrs: Vec<HashPointer>, mut data: Vec<u8>) -> Result<Vec<u8>> {
@@ -334,16 +349,19 @@ impl Capsule {
 
         let record = Record {
             header: header.clone(),
-            heartbeat: Some(heartbeat),
+            heartbeat: Some(heartbeat.clone()),
             body: data,
         };
 
-        // let keyspace = Config::new(&self.store_path).open()?;
-        // let items =
-        //     keyspace.open_partition(self.gdp_name().as_str(), PartitionCreateOptions::default())?;
         let items = self.keyspace.as_ref().unwrap();
 
+        // Store the record under the header hash
         items.insert(&header_hash, serde_json::to_vec(&record)?)?;
+
+        // Also store the heartbeat in the heartbeat partition at the same key
+        if let Some(hb_space) = &self.heartbeat_keyspace {
+            hb_space.insert(&header_hash, serde_json::to_vec(&heartbeat)?)?;
+        }
 
         // Update internal state
         self.last_seqno += 1;
@@ -403,5 +421,71 @@ impl Capsule {
 
     pub fn peek(&self) -> Result<Record> {
         self.read(self.last_pointer.1.clone())
+    }
+
+    pub fn read_heartbeat(&self, header_hash: Vec<u8>) -> Result<RecordHeartbeat> {
+        let hb_bytes = self
+            .heartbeat_keyspace
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("heartbeat partition not opened"))?
+            .get(&header_hash)?
+            .ok_or_else(|| anyhow::anyhow!("heartbeat not found for header hash"))?;
+        let hb: RecordHeartbeat = serde_json::from_slice(&hb_bytes)?;
+        Ok(hb)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ed25519_dalek::SigningKey;
+    use std::collections::BTreeMap;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn heartbeats_traversal() -> anyhow::Result<()> {
+        // unique store path per test run
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+        let mut store_path = std::env::temp_dir();
+        store_path.push(format!("datacapsule_test_{}", nanos));
+        let kv_store = store_path.as_path();
+
+        // create signing key and metadata
+        let seed = [42u8; 32];
+        let signing_key = SigningKey::from_bytes(&seed);
+        let vk = signing_key.verifying_key();
+        let mut md = BTreeMap::new();
+        md.insert(String::from("verify_key"), vk.to_bytes().to_vec());
+        let metadata = Metadata(md);
+
+        let symmetric_key = (0..16).collect::<Vec<u8>>();
+
+        let mut capsule = Capsule::create(kv_store, metadata, signing_key, symmetric_key.clone())?;
+
+        // append several records
+        for i in 1..=4 {
+            let data = format!("payload {}", i).into_bytes();
+            capsule.append(vec![], data)?;
+        }
+
+        // peek root and traverse back via prev_ptr verifying heartbeats match
+        let root = capsule.peek()?;
+        let mut current_hash = root.header.hash();
+
+        loop {
+            let record = capsule.read(current_hash.clone())?;
+            let hb = capsule.read_heartbeat(current_hash.clone())?;
+            let rec_hb_ser = serde_json::to_vec(&record.heartbeat.clone().unwrap())?;
+            let hb_ser = serde_json::to_vec(&hb)?;
+            assert_eq!(rec_hb_ser, hb_ser);
+
+            if let Some(prev) = record.header.prev_ptr {
+                current_hash = prev.1;
+            } else {
+                break;
+            }
+        }
+
+        Ok(())
     }
 }
