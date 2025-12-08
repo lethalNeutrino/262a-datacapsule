@@ -12,6 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         BTreeMap::from([(String::from("verify_key"), (0..16).collect::<Vec<u8>>())]);
     let metadata = Metadata(metadata_map);
     let capsule_topic = connection.create(metadata)?;
+    let encryption_key = (0..16).collect::<Vec<u8>>();
 
     // // Main loop spins ros.
     loop {

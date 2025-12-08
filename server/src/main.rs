@@ -4,6 +4,7 @@ use capsulelib::capsule::{
 };
 use capsulelib::requests::DataCapsuleRequest;
 use futures::{executor::LocalPool, future, stream::StreamExt, task::LocalSpawnExt};
+use log::{debug, info};
 use r2r::Context;
 use r2r::QosProfile;
 
@@ -12,8 +13,34 @@ fn handle_create(
     heartbeat: RecordHeartbeat,
     header: RecordHeader,
 ) -> Result<Capsule> {
-    println!("creating capsule!");
-    todo!()
+    info!("creating capsule!");
+    let gdp_name = metadata.hash_string();
+    let key_var = format!("{}_key", gdp_name);
+    let key_str = match std::env::var(&key_var) {
+        Ok(v) => v,
+        Err(_) => return Err(anyhow::anyhow!("environment variable {} not set", key_var)),
+    };
+
+    // Try to interpret the environment variable as hex if it looks like hex,
+    // otherwise fall back to the raw bytes of the string.
+    // TODO INSECURE ATM use a fixed key for testing for easier test deployments.
+    let symmetric_key: Vec<u8> = (0..16).collect::<Vec<u8>>();
+    /*
+    if key_str.len() % 2 == 0 && key_str.chars().all(|c| c.is_ascii_hexdigit()) {
+        let mut v = Vec::with_capacity(key_str.len() / 2);
+        for i in (0..key_str.len()).step_by(2) {
+            // We validated ASCII hex digits above, so slicing by byte indices is safe.
+            let byte = u8::from_str_radix(&key_str[i..i + 2], 16)
+                .map_err(|e| anyhow::anyhow!("invalid hex in {}: {}", key_var, e))?;
+            v.push(byte);
+        }
+        v
+    } else {
+        key_str.into_bytes()
+    };
+    */
+    Capsule::open(gdp_name, metadata, heartbeat, header, symmetric_key);
+    info!("capsule created!");
 }
 
 fn handle_append(capsule_name: String, record: Record) -> Result<()> {

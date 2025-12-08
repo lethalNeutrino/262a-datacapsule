@@ -20,9 +20,12 @@ pub type Aes128Ctr64LE = ctr::Ctr64LE<aes::Aes128>;
 use anyhow::{Result, bail};
 
 impl Capsule {
+    /// Server-side function to open a container upon getting a create request
     pub fn open<P: AsRef<Path>>(
         kv_store_path: P,
         metadata: Metadata,
+        metadata_header: RecordHeader,
+        metadata_heartbeat: RecordHeartbeat,
         symmetric_key: Vec<u8>,
     ) -> Result<Self> {
         // Implement the logic to open a capsule from storage
@@ -41,6 +44,37 @@ impl Capsule {
         let gdp_name: &str = &metadata.hash_string();
         let (items, heartbeat_items, seqno_items) = init_partitions(&keyspace, gdp_name)?;
 
+        // Encrypt metadata
+        let iv = [0x0; 16];
+        let mut metadata_bytes = serde_json::to_vec(&metadata.0)?;
+        let mut cipher = Aes128Ctr64LE::new(symmetric_key.as_slice().into(), &iv.into());
+        cipher.apply_keystream(&mut metadata_bytes);
+
+        // Create initial record + insert into Fjall
+        let metadata_record = Record {
+            header: metadata_header.clone(),
+            heartbeat: Some(metadata_heartbeat.clone()),
+            body: metadata_bytes,
+        };
+        let metadata_header_hash = metadata_header.hash();
+
+        // Store metadata record in the capsule partition under the metadata header hash key,
+        // and also store the heartbeat in the heartbeat partition under the same key.
+        partition_insert(
+            &items,
+            &metadata_header_hash,
+            serde_json::to_vec(&metadata_record)?,
+        )?;
+        partition_insert(
+            &heartbeat_items,
+            &metadata_header_hash,
+            serde_json::to_vec(&metadata_heartbeat)?,
+        )?;
+
+        // Store seqno -> header mapping for seqno 0
+        let seq0_key = 0usize.to_be_bytes().to_vec();
+        partition_insert(&seqno_items, &seq0_key, metadata_header_hash.clone())?;
+
         Ok(Capsule {
             symmetric_key,
             keyspace: Some(keyspace),
@@ -52,7 +86,7 @@ impl Capsule {
         })
     }
 
-    // Server-side function to place a capsule into a specified location
+    /// Server-side function to place a capsule into a specified location
     pub fn place(
         &mut self,
         header: RecordHeader,
