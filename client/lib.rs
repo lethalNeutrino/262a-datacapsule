@@ -53,7 +53,7 @@ impl Connection {
         metadata: Metadata,
         signing_key: SigningKey,
         symmetric_key: Vec<u8>,
-    ) -> Result<Topic> {
+    ) -> Result<NetworkCapsuleWriter> {
         let subscriber = self.node.subscribe::<r2r::std_msgs::msg::String>(
             &format!("/capsule_{}/client", metadata.hash_string()),
             QosProfile::default(),
@@ -86,10 +86,13 @@ impl Connection {
 
         // publisher.publish();
 
-        Ok(Topic {
-            name: metadata.hash_string(),
-            subscriber: Box::new(subscriber),
-            publisher,
+        Ok(NetworkCapsuleWriter {
+            local_capsule,
+            connection: Topic {
+                name: metadata.hash_string(),
+                subscriber: Box::new(subscriber),
+                publisher,
+            },
         })
     }
 }

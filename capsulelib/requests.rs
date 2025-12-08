@@ -17,4 +17,7 @@ pub enum DataCapsuleRequest {
         header_hash: Vec<u8>,
     },
     Ack,
+    AppendAck {
+        header_hash: String,
+    },
 }

@@ -203,7 +203,6 @@ impl Capsule {
         kv_store_path: P,
         gdp_name: String,
         symmetric_key: Vec<u8>,
-        sign_key: SigningKey,
     ) -> Result<Self> {
         let keyspace = Config::new(&kv_store_path)
             .max_write_buffer_size(128 * 1024 * 1024)
@@ -255,7 +254,6 @@ impl Capsule {
             heartbeat_partition: Some(heartbeat_items),
             seqno_partition: Some(seqno_items),
             metadata,
-            sign_key: Some(sign_key),
             symmetric_key,
             ..Default::default()
         })
