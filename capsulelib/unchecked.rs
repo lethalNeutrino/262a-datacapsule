@@ -36,10 +36,8 @@ impl Capsule {
                 .collect::<String>()
         );
 
-        let iv: [u8; 16] = [record.header.seqno.to_le_bytes(), [0x0_u8; 8]]
-            .concat()
-            .try_into()
-            .unwrap();
+        let iv: [u8; 16] =
+            Self::derive_record_iv(record.header.gdp_name.as_str(), record.header.seqno);
 
         log::debug!("Decryption Key: {:?}", self.symmetric_key);
         log::debug!("Decryption IV: {:?}", iv);
@@ -72,9 +70,13 @@ impl Capsule {
         heartbeat: RecordHeartbeat,
         _data: Vec<u8>,
     ) -> Result<()> {
-        if let Some(hb_space) = &self.heartbeat_keyspace {
+        if let Some(hb_space) = &self.heartbeat_partition {
             let header_hash = header.hash();
-            hb_space.insert(&header_hash, serde_json::to_vec(&heartbeat)?)?;
+            super::utils::partition_insert(
+                hb_space,
+                &header_hash,
+                serde_json::to_vec(&heartbeat)?,
+            )?;
         } else {
             // Mirror the checked API behavior and return an error when partition isn't opened.
             bail!("heartbeat partition not opened");

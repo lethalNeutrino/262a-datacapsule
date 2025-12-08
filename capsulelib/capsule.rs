@@ -261,6 +261,23 @@ impl Capsule {
         })
     }
 
+    fn derive_record_iv(gdp_name: &str, seqno: usize) -> [u8; 16] {
+        // Derive a deterministic IV for record encryption/decryption.
+        // This mirrors the previous append behavior (sha256 over the first 32 bytes
+        // of the gdp_name and the seqno in little-endian) so both writer and reader
+        // derive the same IV.
+        let mut hasher = Sha256::new();
+        let name_bytes = gdp_name.as_bytes();
+        let to_hash = if name_bytes.len() >= 32 {
+            &name_bytes[..32]
+        } else {
+            name_bytes
+        };
+        hasher.update(to_hash);
+        hasher.update(seqno.to_le_bytes());
+        hasher.finalize()[..16].try_into().unwrap()
+    }
+
     pub fn append(&mut self, hash_ptrs: Vec<HashPointer>, mut data: Vec<u8>) -> Result<Vec<u8>> {
         // Create Header
         let header = RecordHeader {
@@ -300,10 +317,7 @@ impl Capsule {
         );
 
         // Encrypt Data
-        let mut hasher = Sha256::new();
-        hasher.update(&self.gdp_name().as_bytes()[..32]);
-        hasher.update((self.last_seqno + 1).to_le_bytes());
-        let iv: [u8; 16] = hasher.finalize()[..16].try_into().unwrap();
+        let iv: [u8; 16] = Self::derive_record_iv(&self.gdp_name(), self.last_seqno + 1);
         log::debug!(
             "Serialized data: {:?}",
             data.iter()
@@ -371,10 +385,8 @@ impl Capsule {
                 .collect::<String>()
         );
 
-        let iv: [u8; 16] = [record.header.seqno.to_le_bytes(), [0x0_u8; 8]]
-            .concat()
-            .try_into()
-            .unwrap();
+        let iv: [u8; 16] =
+            Self::derive_record_iv(record.header.gdp_name.as_str(), record.header.seqno);
 
         debug!("Decryption Key: {:?}", self.symmetric_key);
         debug!("Decryption IV: {:?}", iv);
