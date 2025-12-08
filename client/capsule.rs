@@ -1,9 +1,5 @@
 use crate::Topic;
-use anyhow::Result;
-use capsulelib::{Capsule, Metadata};
-use futures::{Stream, executor::LocalPool, future, stream::StreamExt, task::LocalSpawnExt};
-use r2r::{Publisher, QosProfile, WrappedTypesupport};
-use std::collections::HashMap;
+use capsulelib::Capsule;
 
 struct NetworkCapsuleWriter
 // where

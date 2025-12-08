@@ -2,10 +2,9 @@ mod capsule;
 
 use anyhow::Result;
 use capsulelib::{Metadata, SHA256Hashable};
-use futures::{Stream, executor::LocalPool, future, stream::StreamExt, task::LocalSpawnExt};
-use r2r::{Publisher, QosProfile, WrappedTypesupport};
+use futures::{Stream, executor::LocalPool, task::LocalSpawnExt};
+use r2r::{Publisher, QosProfile};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize)]
 enum DataCapsuleRequest {
@@ -41,7 +40,7 @@ impl Connection {
             "/chatter/server",
             QosProfile::default(),
         )?;
-        let mut pool = LocalPool::new();
+        let pool = LocalPool::new();
         Ok(Connection {
             ctx,
             node,
