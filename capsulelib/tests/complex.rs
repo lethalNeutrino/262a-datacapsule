@@ -1,5 +1,5 @@
 include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/common.rs"));
-use datacapsule_capsulelib::capsule::SHA256Hashable;
+use datacapsule_capsulelib::capsule::structs::SHA256Hashable;
 use uuid::Uuid;
 
 /// A heavier integration test that performs many appends, creates some

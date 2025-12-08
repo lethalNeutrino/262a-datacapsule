@@ -1,3 +1,5 @@
+pub mod structs;
+mod utils;
 use aes::cipher::{KeyIvInit, StreamCipher};
 use ed25519_dalek::SigningKey;
 use ed25519_dalek::{Signature, Signer};
@@ -7,114 +9,17 @@ use log::debug;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, path::Path};
+use structs::{
+    Capsule, HashPointer, Metadata, Record, RecordHeader, RecordHeartbeat, RecordHeartbeatData,
+    SHA256Hashable,
+};
+use utils::{partition_insert, sign_heartbeat_with_key, verify_heartbeat_with_metadata};
 
 pub type Aes128Ctr64LE = ctr::Ctr64LE<aes::Aes128>;
 
 use anyhow::{Result, bail};
 
-struct MissingMetadataKey;
-
-pub type HashPointer = (usize, Vec<u8>);
-
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
-pub struct Metadata(pub BTreeMap<String, Vec<u8>>);
-
-pub trait SHA256Hashable {
-    fn hash(&self) -> Vec<u8>;
-    fn hash_string(&self) -> String {
-        self.hash()
-            .iter()
-            .map(|b| format!("{:02x}", b))
-            .collect::<String>()
-    }
-}
-
-impl SHA256Hashable for Metadata {
-    fn hash(&self) -> Vec<u8> {
-        // compute SHA256 hash of metadata deterministically (BTreeMap is ordered)
-        let mut hasher = Sha256::new();
-        for (k, v) in &self.0 {
-            hasher.update(k.as_bytes());
-            hasher.update(v);
-        }
-        hasher.finalize().to_vec()
-    }
-}
-
-impl SHA256Hashable for HashPointer {
-    fn hash(&self) -> Vec<u8> {
-        let mut hasher = Sha256::new();
-        hasher.update(self.0.to_be_bytes());
-        hasher.update(&self.1);
-        hasher.finalize().to_vec()
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Record {
-    pub header: RecordHeader,
-    pub heartbeat: Option<RecordHeartbeat>,
-    pub body: Vec<u8>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct RecordHeader {
-    pub seqno: usize,
-    pub gdp_name: String,
-    pub prev_ptr: Option<HashPointer>,
-    pub hash_ptrs: Vec<HashPointer>,
-}
-
-impl SHA256Hashable for RecordHeader {
-    fn hash(&self) -> Vec<u8> {
-        let mut hasher = Sha256::new();
-        hasher.update(self.seqno.to_be_bytes());
-        hasher.update(&self.gdp_name);
-        hasher.update(self.prev_ptr.as_ref().map_or(vec![], |p| p.hash()));
-        for hash_ptr in &self.hash_ptrs {
-            hasher.update(hash_ptr.hash());
-        }
-        hasher.finalize().to_vec()
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct RecordHeartbeatData {
-    pub seqno: usize,
-    pub gdp_name: String,
-    pub header_hash: Vec<u8>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct RecordHeartbeat {
-    pub data: RecordHeartbeatData,
-    pub signature: Signature,
-}
-
-struct RecordContainer {
-    records: Vec<(Option<RecordHeartbeat>, RecordHeader, Vec<u8>)>,
-}
-
-#[derive(Default)]
-pub struct Capsule {
-    pub metadata: Metadata,
-    pub symmetric_key: Vec<u8>,
-    pub sign_key: Option<SigningKey>,
-    pub last_seqno: usize,
-    pub last_pointer: HashPointer,
-    pub keyspace: Option<PartitionHandle>,
-    // Per-capsule heartbeat partition
-    pub heartbeat_keyspace: Option<PartitionHandle>,
-    // Per-capsule seqno -> header hash partition
-    pub seqno_keyspace: Option<PartitionHandle>,
-}
-
 impl Capsule {
-    #[inline]
-    pub fn gdp_name(&self) -> String {
-        self.metadata.hash_string()
-    }
-
     pub fn open<P: AsRef<Path>>(
         kv_store_path: P,
         metadata: Metadata,
@@ -171,28 +76,8 @@ impl Capsule {
         heartbeat: RecordHeartbeat,
         _data: Vec<u8>,
     ) -> Result<()> {
-        // Ensure metadata contains the verify key
-        let vk_bytes = self
-            .metadata
-            .0
-            .get("verify_key")
-            .ok_or_else(|| anyhow::anyhow!("metadata must contain 'verify_key'"))?;
-
-        // Convert stored verify_key bytes into a fixed-size array and construct VerifyingKey
-        let vk_arr: [u8; 32] = vk_bytes
-            .as_slice()
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("verify_key must be 32 bytes"))?;
-        let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&vk_arr)?;
-
-        // Serialize the heartbeat data to the same form that was signed
-        let msg = serde_json::to_vec(&heartbeat.data)?;
-
-        // Verify the signature on the heartbeat.data
-        if let Err(e) = ed25519_dalek::Verifier::verify(&verifying_key, &msg, &heartbeat.signature)
-        {
-            bail!("invalid heartbeat signature: {}", e);
-        }
+        // Verify heartbeat signature using helper (reads verify_key from metadata)
+        verify_heartbeat_with_metadata(&self.metadata, &heartbeat.data, &heartbeat.signature)?;
 
         // Insert heartbeat into the per-capsule heartbeat partition at the same key
         // used for the record (hash of header)
@@ -262,9 +147,9 @@ impl Capsule {
             header_hash: metadata_header_hash.clone(),
         };
 
-        // Sign the metadata heartbeat
+        // Sign the metadata heartbeat (use helper)
         let heartbeat_data_signature =
-            sign_key.sign(serde_json::to_vec(&metadata_heartbeat_data)?.as_ref());
+            sign_heartbeat_with_key(&sign_key, &metadata_heartbeat_data)?;
 
         let metadata_heartbeat = RecordHeartbeat {
             data: metadata_heartbeat_data,
@@ -395,12 +280,13 @@ impl Capsule {
             header_hash: header_hash.clone(),
         };
 
-        // Sign Heartbeat
-        let heartbeat_signature = self
-            .sign_key
-            .as_ref()
-            .expect("append must be called by a writer")
-            .sign(serde_json::to_vec(&heartbeat_data)?.as_ref());
+        // Sign Heartbeat (use helper)
+        let heartbeat_signature = sign_heartbeat_with_key(
+            self.sign_key
+                .as_ref()
+                .expect("append must be called by a writer"),
+            &heartbeat_data,
+        )?;
 
         let heartbeat = RecordHeartbeat {
             data: heartbeat_data,
@@ -509,94 +395,15 @@ impl Capsule {
 
         // Verify heartbeat signature (if present) using the capsule's stored verify_key.
         if let Some(hb) = &record.heartbeat {
-            // Ensure metadata contains the verify key
-            let vk_bytes = self
-                .metadata
-                .0
-                .get("verify_key")
-                .ok_or_else(|| anyhow::anyhow!("metadata must contain 'verify_key'"))?;
-
-            // Convert stored verify_key bytes into a fixed-size array and construct VerifyingKey
-            let vk_arr: [u8; 32] = vk_bytes
-                .as_slice()
-                .try_into()
-                .map_err(|_| anyhow::anyhow!("verify_key must be 32 bytes"))?;
-            let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&vk_arr)?;
-
-            // Serialize the heartbeat data to the same form that was signed
-            let msg = serde_json::to_vec(&hb.data)?;
-
-            // Verify the signature on the heartbeat.data
-            if let Err(e) = ed25519_dalek::Verifier::verify(&verifying_key, &msg, &hb.signature) {
-                bail!("invalid heartbeat signature: {}", e);
-            }
+            // Verify heartbeat signature using helper (reads verify_key from metadata)
+            verify_heartbeat_with_metadata(&self.metadata, &hb.data, &hb.signature)?;
         }
 
         Ok(record)
     }
-
-    /// Read heartbeat stored in the heartbeat partition by header hash.
-    pub fn read_heartbeat(&self, header_hash: Vec<u8>) -> Result<RecordHeartbeat> {
-        let hb_bytes = self
-            .heartbeat_keyspace
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("heartbeat partition not opened"))?
-            .get(&header_hash)?
-            .ok_or_else(|| anyhow::anyhow!("heartbeat not found for header hash"))?;
-        let hb: RecordHeartbeat = serde_json::from_slice(&hb_bytes)?;
-        Ok(hb)
-    }
-
-    /// Return the header hash stored for the given seqno (persistent mapping).
-    pub fn get_header_hash_for_seqno(&self, seqno: usize) -> Result<Vec<u8>> {
-        let seq_space = self
-            .seqno_keyspace
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("seqno partition not opened"))?;
-        let key = seqno.to_be_bytes().to_vec();
-        let v = seq_space
-            .get(&key)?
-            .ok_or_else(|| anyhow::anyhow!("no header hash for seqno {}", seqno))?;
-        Ok(v.to_vec())
-    }
-
-    /// Store (seqno -> header_hash) mapping into the seqno partition.
-    pub fn put_header_hash_for_seqno(&self, seqno: usize, header_hash: Vec<u8>) -> Result<()> {
-        let seq_space = self
-            .seqno_keyspace
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("seqno partition not opened"))?;
-        let key = seqno.to_be_bytes().to_vec();
-        partition_insert(seq_space, &key, header_hash)?;
-        Ok(())
-    }
-
-    // Helper: insert heartbeat into heartbeat partition if opened.
-    fn insert_into_heartbeat_partition_opt(&self, key: &[u8], value: Vec<u8>) -> Result<()> {
-        if let Some(hb_space) = &self.heartbeat_keyspace {
-            partition_insert(hb_space, key, value)?;
-        }
-        Ok(())
-    }
-
-    // Helper: insert seqno -> header_hash into seqno partition if opened.
-    fn insert_into_seqno_partition_opt(&self, seqno: usize, header_hash: Vec<u8>) -> Result<()> {
-        if let Some(seq_space) = &self.seqno_keyspace {
-            let key = seqno.to_be_bytes().to_vec();
-            partition_insert(seq_space, &key, header_hash)?;
-        }
-        Ok(())
-    }
-
     pub fn peek(&self) -> Result<Record> {
         self.read(self.last_pointer.1.clone())
     }
-}
-
-/// Lightweight helper for inserting into a partition handle (centralized for clarity).
-fn partition_insert(part: &PartitionHandle, key: &[u8], value: Vec<u8>) -> Result<()> {
-    part.insert(key, value)?;
-    Ok(())
 }
 
 /// Feature-gated unchecked utilities live in their own module. This keeps the main

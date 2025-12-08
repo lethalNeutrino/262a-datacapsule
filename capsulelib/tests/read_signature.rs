@@ -1,6 +1,6 @@
 include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/common.rs"));
 
-use datacapsule_capsulelib::capsule::SHA256Hashable;
+use datacapsule_capsulelib::capsule::structs::SHA256Hashable;
 use ed25519_dalek::Signature as DalekSignature;
 
 #[test]

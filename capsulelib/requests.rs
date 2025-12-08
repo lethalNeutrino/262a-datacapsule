@@ -1,4 +1,4 @@
-use crate::capsule::{Metadata, Record, RecordHeader, RecordHeartbeat};
+use crate::capsule::structs::{Metadata, Record, RecordHeader, RecordHeartbeat};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]

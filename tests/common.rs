@@ -1,4 +1,4 @@
-use datacapsule_capsulelib::capsule::{Capsule, Metadata};
+use datacapsule_capsulelib::capsule::structs::{Capsule, Metadata};
 use ed25519_dalek::SigningKey;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -41,7 +41,12 @@ pub fn create_capsule_for_test(
 
     // Capsule::create expects ownership of a SigningKey; many tests still want the
     // original signing key instance, so clone it when passing to create.
-    let capsule = Capsule::create(kv_store, metadata, signing_key.clone(), symmetric_key.clone())?;
+    let capsule = Capsule::create(
+        kv_store,
+        metadata,
+        signing_key.clone(),
+        symmetric_key.clone(),
+    )?;
 
     Ok((capsule, signing_key, symmetric_key, store))
 }
