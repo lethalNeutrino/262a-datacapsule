@@ -68,6 +68,7 @@ fn handle_create(
             QosProfile::default(),
         )?
     };
+
     let publisher = {
         let mut node = node_rc.borrow_mut();
         node.create_publisher::<r2r::std_msgs::msg::String>(

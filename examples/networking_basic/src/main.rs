@@ -44,8 +44,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         generated_verify_key_bytes.to_vec(),
     )]);
     let metadata = Metadata(metadata_map);
-    let capsule_topic =
+    let mut capsule_topic =
         connection.create(data_path, metadata, generated_signing_key, encryption_key)?;
+
+    capsule_topic.append(vec![], "Hello, World!".as_bytes().to_vec())?;
 
     connection.pool.spawner().spawn_local(async move {
         capsule_topic
