@@ -152,6 +152,36 @@ impl Capsule {
         Ok(())
     }
 
+    // Feature-gated unchecked variant for benchmarking and tests. This does not verify the
+    // heartbeat signature. Only compiled when the `unchecked` feature is enabled.
+    #[cfg(feature = "unchecked")]
+    pub fn place_unchecked(
+        &self,
+        header: RecordHeader,
+        heartbeat: RecordHeartbeat,
+        _data: Vec<u8>,
+    ) -> Result<()> {
+        // Directly insert the heartbeat into the heartbeat partition under the header hash.
+        if let Some(hb_space) = &self.heartbeat_keyspace {
+            let header_hash = header.hash();
+            hb_space.insert(&header_hash, serde_json::to_vec(&heartbeat)?)?;
+        }
+        Ok(())
+    }
+
+    /// Overwrite a stored record (by header hash) in the primary partition.
+    /// This is feature-gated because it allows bypassing high-level write APIs
+    /// and is intended for benchmarks or test tooling.
+    #[cfg(feature = "unchecked")]
+    pub fn overwrite_record(&self, header_hash: Vec<u8>, record: &Record) -> Result<()> {
+        let items = self
+            .keyspace
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("keyspace partition not opened"))?;
+        items.insert(&header_hash, serde_json::to_vec(record)?)?;
+        Ok(())
+    }
+
     pub fn create<P: AsRef<Path>>(
         kv_store_path: P,
         metadata: Metadata,
@@ -470,6 +500,61 @@ impl Capsule {
                 bail!("invalid heartbeat signature: {}", e);
             }
         }
+
+        Ok(record)
+    }
+
+    // Feature-gated unchecked read that skips heartbeat signature verification.
+    // Useful for benchmarks or tooling where signature verification should be disabled.
+    #[cfg(feature = "unchecked")]
+    pub fn read_unchecked(&self, header_hash: Vec<u8>) -> Result<Record> {
+        let record_bytes = self
+            .keyspace
+            .clone()
+            .unwrap()
+            .get(&header_hash)
+            .unwrap()
+            .unwrap_or_else(|| {
+                panic!(
+                    "Unable to find corresponding record for hash {:?}",
+                    header_hash
+                )
+            })
+            .to_vec();
+
+        let mut record: Record = serde_json::from_slice(&record_bytes)?;
+
+        log::debug!(
+            "retrieved record data (encrypted): {}",
+            record
+                .body
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>()
+        );
+
+        let iv: [u8; 16] = [record.header.seqno.to_le_bytes(), [0x0_u8; 8]]
+            .concat()
+            .try_into()
+            .unwrap();
+
+        debug!("Decryption Key: {:?}", self.symmetric_key);
+        debug!("Decryption IV: {:?}", iv);
+
+        let mut cipher = Aes128Ctr64LE::new(self.symmetric_key.as_slice().into(), &iv.into());
+        cipher.apply_keystream(&mut record.body);
+
+        log::info!("retrieved {:?}", record);
+        log::info!(
+            "retrieved record data (decrypted) {:?}",
+            record
+                .body
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>()
+        );
+
+        // NOTE: Intentionally do not verify the heartbeat signature in this unchecked variant.
 
         Ok(record)
     }

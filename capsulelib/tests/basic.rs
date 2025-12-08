@@ -55,13 +55,85 @@ fn tampered_heartbeat_signature_is_rejected() -> anyhow::Result<()> {
     // Tamper signature bytes by flipping a bit
     let mut sig_bytes = heartbeat.signature.to_bytes();
     sig_bytes[0] ^= 0x01;
-    // Reconstruct signature (returns a Signature value)
-    let tampered_sig: DalekSignature = DalekSignature::from_bytes(&sig_bytes);
+    let arr: [u8; 64] = sig_bytes.as_slice().try_into().unwrap();
+    let tampered_sig: DalekSignature = DalekSignature::from_bytes(&arr);
     heartbeat.signature = tampered_sig;
 
     // Calling place with tampered heartbeat should fail signature verification
     let res = capsule.place(header, heartbeat, vec![]);
     assert!(res.is_err(), "tampered heartbeat signature should be rejected");
+
+    Ok(())
+}
+
+/// The following tests exercise the feature-gated unchecked variants.
+/// They are only compiled and run when the `unchecked` feature is enabled.
+#[cfg(feature = "unchecked")]
+#[test]
+fn read_unchecked_allows_tampered_record() -> anyhow::Result<()> {
+    // Create capsule
+    let (mut capsule, _signing_key, _symmetric_key, _path) =
+        create_capsule_for_test([21u8; 32], "capsule_read_unchecked")?;
+
+    // Append one record
+    let data = b"payload for unchecked read".to_vec();
+    let header_hash = capsule.append(vec![], data.clone())?;
+
+    // Read the record, tamper its embedded heartbeat signature, and overwrite in store
+    let mut rec = capsule.read(header_hash.clone())?;
+    if let Some(ref mut hb) = rec.heartbeat {
+        let mut sig_bytes = hb.signature.to_bytes();
+        sig_bytes[0] ^= 0x01;
+        let arr: [u8; 64] = sig_bytes.as_slice().try_into().unwrap();
+        hb.signature = ed25519_dalek::Signature::from_bytes(&arr);
+    }
+    // Overwrite the stored record with the tampered one using feature-gated API
+    capsule.overwrite_record(header_hash.clone(), &rec)?;
+
+    // Normal read should now reject due to signature verification
+    let res_checked = capsule.read(header_hash.clone());
+    assert!(res_checked.is_err(), "checked read should reject tampered heartbeat");
+
+    // But read_unchecked should succeed (skips signature verification)
+    let res_unchecked = capsule.read_unchecked(header_hash.clone());
+    assert!(res_unchecked.is_ok(), "read_unchecked should return record despite tampered signature");
+    let rec_unchecked = res_unchecked.unwrap();
+    assert_eq!(rec_unchecked.header.hash(), header_hash);
+
+    Ok(())
+}
+
+#[cfg(feature = "unchecked")]
+#[test]
+fn place_unchecked_allows_inserting_tampered_heartbeat() -> anyhow::Result<()> {
+    // Create capsule
+    let (mut capsule, _signing_key, _symmetric_key, _path) =
+        create_capsule_for_test([22u8; 32], "capsule_place_unchecked")?;
+
+    // Append one record to obtain a header (and header_hash)
+    let data = b"payload for place_unchecked".to_vec();
+    let header_hash = capsule.append(vec![], data.clone())?;
+    let record = capsule.read(header_hash.clone())?;
+    let header = record.header.clone();
+
+    // Prepare a tampered heartbeat (flip signature bytes)
+    let mut tampered_hb = record.heartbeat.expect("should have heartbeat");
+    let mut sig_bytes = tampered_hb.signature.to_bytes();
+    sig_bytes[0] ^= 0x01;
+    let arr: [u8; 64] = sig_bytes.as_slice().try_into().unwrap();
+    tampered_hb.signature = ed25519_dalek::Signature::from_bytes(&arr);
+
+    // Using place (checked) should reject the tampered heartbeat
+    let res_checked = capsule.place(header.clone(), tampered_hb.clone(), vec![]);
+    assert!(res_checked.is_err(), "place should reject tampered heartbeat");
+
+    // But place_unchecked should allow inserting the tampered heartbeat into heartbeat partition
+    let res_unchecked = capsule.place_unchecked(header.clone(), tampered_hb.clone(), vec![]);
+    assert!(res_unchecked.is_ok(), "place_unchecked should allow tampered heartbeat");
+
+    // And read_heartbeat should now return the tampered heartbeat from the heartbeat partition
+    let hb_read = capsule.read_heartbeat(header_hash.clone())?;
+    assert_eq!(serde_json::to_vec(&hb_read)?, serde_json::to_vec(&tampered_hb)?);
 
     Ok(())
 }

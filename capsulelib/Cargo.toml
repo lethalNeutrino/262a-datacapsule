@@ -25,3 +25,8 @@ sha2 = "0.10.9"
 
 [dev-dependencies]
 uuid = { version = "1.4", features = ["v4"] }
+
+[features]
+# Unchecked variants skip signature verification and other safety checks.
+# Intended for benchmarking or tooling where verification overhead should be excluded.
+unchecked = []
