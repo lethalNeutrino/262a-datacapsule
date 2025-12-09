@@ -108,6 +108,7 @@ impl<'a> Connection<'a> {
 
         let gdp_name = metadata.hash_string();
 
+        // TODO: GET IF EXISTS
         let local_capsule =
             Capsule::create(kv_store_path, metadata.clone(), signing_key, symmetric_key)?;
         let metadata_record = local_capsule.peek()?;
@@ -132,7 +133,7 @@ impl<'a> Connection<'a> {
 
         Ok(NetworkCapsuleWriter {
             local_capsule,
-            connection: Topic {
+            topic: Topic {
                 name: metadata.hash_string(),
                 subscriber: Box::new(subscriber),
                 publisher,

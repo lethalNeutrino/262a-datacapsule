@@ -1,6 +1,7 @@
 include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/common.rs"));
-use datacapsule_capsulelib::capsule::structs::SHA256Hashable;
+use datacapsule_capsulelib::capsule::structs::{CapsuleSnapshot, SHA256Hashable};
 use ed25519_dalek::Signature as DalekSignature;
+use fjall::PartitionCreateOptions;
 use serde_json;
 
 /// Basic single-append functionality test.
@@ -186,6 +187,81 @@ fn create_twice_is_ok() -> anyhow::Result<()> {
 
     // Also ensure peek returns a valid record for the existing capsule
     let _ = capsule2.peek()?;
+
+    Ok(())
+}
+
+/// Snapshot flow test: create a capsule, append a record (updating snapshot), drop the capsule,
+/// then `get` the capsule back from the store and verify the snapshot state (last_seqno, metadata)
+/// and that the appended record can be read.
+#[test]
+fn snapshot_roundtrip() -> anyhow::Result<()> {
+    // Unique seed and prefix to avoid collisions between tests
+    let seed = [44u8; 32];
+    let prefix = "capsule_snapshot_flow";
+
+    // Create capsule using helper (this calls Capsule::create and writes initial snapshot)
+    let (mut capsule, _signing_key, symmetric_key, store_path) = create_capsule_for_test(seed, prefix)?;
+
+    // Append a record so the snapshot is updated after append
+    let payload = b"snapshot payload".to_vec();
+    let header_hash = capsule.append(vec![], payload.clone())?;
+    let expected_seqno = capsule.last_seqno;
+    let gdp_name = capsule.metadata.hash_string();
+
+    // Drop the capsule to ensure Keyspace/partitions are closed and subsequent get reconstructs from storage
+    drop(capsule);
+
+    // Reconstruct using get; get should consult the persisted snapshot and restore last_seqno/last_pointer
+    let reconstructed = Capsule::get(
+        store_path.as_path(),
+        gdp_name.clone(),
+        symmetric_key.clone(),
+    )?;
+
+    // Snapshot should have been reflected in reconstructed capsule
+    assert_eq!(reconstructed.last_seqno, expected_seqno);
+    assert_eq!(reconstructed.metadata.hash_string(), gdp_name);
+
+    // Ensure we can read the record we appended earlier
+    let rec = reconstructed.read(header_hash.clone())?;
+    assert_eq!(rec.header.hash(), header_hash);
+
+    Ok(())
+}
+
+/// Verify that the persisted snapshot is updated after append().
+#[test]
+fn snapshot_updated_on_append() -> anyhow::Result<()> {
+    // Create a test capsule
+    let seed = [99u8; 32];
+    let prefix = "capsule_snapshot_update";
+
+    let (mut capsule, _signing_key, _symmetric_key, _store_path) = create_capsule_for_test(seed, prefix)?;
+    let gdp_name = capsule.metadata.hash_string();
+
+    // Append a record which should trigger snapshot update in append()
+    let header_hash = capsule.append(vec![], b"update snapshot payload".to_vec())?;
+
+    // Open the snapshots partition directly from the capsule keyspace and read the snapshot
+    let ks = capsule
+        .keyspace
+        .as_ref()
+        .expect("keyspace should be present on capsule");
+    let snaps = ks.open_partition(
+        "capsule_snapshots",
+        PartitionCreateOptions::default().max_memtable_size(8 * 1024 * 1024),
+    )?;
+    let snap_bytes = snaps.get(gdp_name.as_bytes())?.expect("snapshot should exist");
+    let snap: CapsuleSnapshot = serde_json::from_slice(&snap_bytes)?;
+
+    assert_eq!(snap.last_seqno, capsule.last_seqno);
+    assert_eq!(snap.last_pointer.0, capsule.last_pointer.0);
+    assert_eq!(snap.last_pointer.1, capsule.last_pointer.1);
+
+    // Also ensure the appended record is readable
+    let rec = capsule.read(header_hash.clone())?;
+    assert_eq!(rec.header.hash(), header_hash);
 
     Ok(())
 }

@@ -58,7 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     connection.pool.spawner().spawn_local(async move {
         capsule_writer
-            .connection
+            .topic
             .subscriber
             .for_each(|msg| {
                 // Parse the incoming request and call the appropriate handler.

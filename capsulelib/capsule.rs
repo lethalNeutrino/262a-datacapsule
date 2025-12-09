@@ -8,12 +8,14 @@ use log::debug;
 use sha2::{Digest, Sha256};
 use std::path::Path;
 use structs::{
-    Capsule, HashPointer, Metadata, Record, RecordHeader, RecordHeartbeat, RecordHeartbeatData,
-    SHA256Hashable,
+    Capsule, CapsuleSnapshot, HashPointer, Metadata, Record, RecordHeader, RecordHeartbeat,
+    RecordHeartbeatData, SHA256Hashable,
 };
 use utils::{
     init_partitions, partition_insert, sign_heartbeat_with_key, verify_heartbeat_with_metadata,
 };
+
+
 
 pub type Aes128Ctr64LE = ctr::Ctr64LE<aes::Aes128>;
 
@@ -28,9 +30,6 @@ impl Capsule {
         metadata_heartbeat: RecordHeartbeat,
         symmetric_key: Vec<u8>,
     ) -> Result<Self> {
-        // Implement the logic to open a capsule from storage
-        // This could involve reading metadata, keys, and other necessary data
-        // For now, we'll just return a default capsule
         if !metadata.0.contains_key(&String::from("verify_key")) {
             bail!("metadata must contain 'verify_key'");
         }
@@ -106,7 +105,6 @@ impl Capsule {
             self.last_pointer = (header.seqno, header.hash())
         }
 
-        // Return created capsule
         Ok(())
     }
 
@@ -139,11 +137,24 @@ impl Capsule {
 
         let metadata_header_hash = metadata_header.hash();
 
-        // If a metadata record already exists for this header hash, treat the capsule
-        // as existing and return the opened capsule (attach the signing key).
+        // If a metadata record already exists under the metadata header hash,
+        // attempt to reconstruct the capsule from a persisted snapshot if present.
         if let Some(_) = items.get(&metadata_header_hash)? {
-            // Capsule already exists on disk; open it via `get` and attach the sign_key.
-            let mut existing = Capsule::get(kv_store_path, gdp_name.to_string(), symmetric_key)?;
+            // Try to read a snapshot partition/key. We store snapshots in a dedicated partition.
+            let snapshots = keyspace.open_partition(
+                "capsule_snapshots",
+                PartitionCreateOptions::default().max_memtable_size(8 * 1024 * 1024),
+            )?;
+            if let Some(snapshot_bytes) = snapshots.get(gdp_name.as_bytes())? {
+                let snapshot: CapsuleSnapshot = serde_json::from_slice(&snapshot_bytes)?;
+                // Reopen partitions and reconstruct the Capsule using snapshot info
+                let mut existing = Capsule::get(kv_store_path, gdp_name.to_string(), snapshot.symmetric_key.clone())?;
+                existing.sign_key = Some(sign_key);
+                existing.snapshot_key = Some(gdp_name.as_bytes().to_vec());
+                return Ok(existing);
+            }
+            // If no snapshot present, fall back to `get` behavior
+            let mut existing = Capsule::get(kv_store_path, gdp_name.to_string(), symmetric_key.clone())?;
             existing.sign_key = Some(sign_key);
             return Ok(existing);
         }
@@ -194,7 +205,21 @@ impl Capsule {
         let seq0_key = 0usize.to_be_bytes().to_vec();
         partition_insert(&seqno_items, &seq0_key, metadata_header_hash.clone())?;
 
-        // Return created capsule
+        // Persist a snapshot of the capsule state into a global snapshots partition
+        // so the capsule can be reconstructed quickly by `get`.
+        let snapshots = keyspace.open_partition(
+            "capsule_snapshots",
+            PartitionCreateOptions::default().max_memtable_size(8 * 1024 * 1024),
+        )?;
+        let snapshot = CapsuleSnapshot {
+            metadata: metadata.clone(),
+            symmetric_key: symmetric_key.clone(),
+            last_seqno: 0,
+            last_pointer: (0, metadata_header.hash()),
+        };
+        partition_insert(&snapshots, gdp_name.as_bytes(), serde_json::to_vec(&snapshot)?)?;
+
+        // Return created capsule (attach snapshot_key so future appends update it)
         Ok(Capsule {
             metadata: metadata.clone(),
             sign_key: Some(sign_key),
@@ -205,6 +230,7 @@ impl Capsule {
             record_partition: Some(items),
             heartbeat_partition: Some(heartbeat_items),
             seqno_partition: Some(seqno_items),
+            snapshot_key: Some(gdp_name.as_bytes().to_vec()),
         })
     }
 
@@ -218,6 +244,44 @@ impl Capsule {
             .open()?;
         keyspace.persist(PersistMode::SyncAll)?;
 
+        // Attempt to read a persisted snapshot first; if present reconstruct the capsule quickly.
+        let snapshots = keyspace.open_partition(
+            "capsule_snapshots",
+            PartitionCreateOptions::default().max_memtable_size(8 * 1024 * 1024),
+        )?;
+        if let Some(snap_bytes) = snapshots.get(gdp_name.as_bytes())? {
+            let snap: CapsuleSnapshot = serde_json::from_slice(&snap_bytes)?;
+            // Open partitions for the capsule
+            let items = keyspace.open_partition(
+                gdp_name.as_str(),
+                PartitionCreateOptions::default().max_memtable_size(64 * 1024 * 1024),
+            )?;
+            let heartbeat_partition_name = format!("{}-heartbeats", gdp_name.as_str());
+            let heartbeat_items = keyspace.open_partition(
+                heartbeat_partition_name.as_str(),
+                PartitionCreateOptions::default().max_memtable_size(32 * 1024 * 1024),
+            )?;
+            let seqno_partition_name = format!("{}-seqnos", gdp_name.as_str());
+            let seqno_items = keyspace.open_partition(
+                seqno_partition_name.as_str(),
+                PartitionCreateOptions::default().max_memtable_size(16 * 1024 * 1024),
+            )?;
+
+            return Ok(Capsule {
+                record_partition: Some(items),
+                heartbeat_partition: Some(heartbeat_items),
+                seqno_partition: Some(seqno_items),
+                metadata: snap.metadata,
+                symmetric_key: snap.symmetric_key,
+                last_seqno: snap.last_seqno,
+                last_pointer: snap.last_pointer,
+                keyspace: Some(keyspace),
+                snapshot_key: Some(gdp_name.as_bytes().to_vec()),
+                ..Default::default()
+            });
+        }
+
+        // Fallback: reconstruct metadata by reading the metadata record stored at seqno 0.
         // Open capsule partition
         let items = keyspace.open_partition(
             gdp_name.as_str(),
@@ -258,6 +322,7 @@ impl Capsule {
 
         let metadata: Metadata = serde_json::from_slice(&body)?;
 
+        // If no snapshot existed, default last_seqno/last_pointer to metadata (seqno 0)
         Ok(Capsule {
             record_partition: Some(items),
             heartbeat_partition: Some(heartbeat_items),
@@ -265,16 +330,13 @@ impl Capsule {
             metadata,
             symmetric_key,
             last_seqno: 0,
-            last_pointer: (0, metadata_header_hash.clone()),
+            last_pointer: (0, metadata_header_hash),
+            keyspace: Some(keyspace),
             ..Default::default()
         })
     }
 
     fn derive_record_iv(gdp_name: &str, seqno: usize) -> [u8; 16] {
-        // Derive a deterministic IV for record encryption/decryption.
-        // This mirrors the previous append behavior (sha256 over the first 32 bytes
-        // of the gdp_name and the seqno in little-endian) so both writer and reader
-        // derive the same IV.
         let mut hasher = Sha256::new();
         let name_bytes = gdp_name.as_bytes();
         let to_hash = if name_bytes.len() >= 32 {
@@ -365,6 +427,22 @@ impl Capsule {
         // Update internal state
         self.last_seqno += 1;
         self.last_pointer = (header.seqno, header.hash());
+
+        // Update the persisted snapshot so later `get` calls can reconstruct quickly.
+        if let Some(ks) = &self.keyspace {
+            let snapshots = ks.open_partition(
+                "capsule_snapshots",
+                PartitionCreateOptions::default().max_memtable_size(8 * 1024 * 1024),
+            )?;
+            let snapshot = CapsuleSnapshot {
+                metadata: self.metadata.clone(),
+                symmetric_key: self.symmetric_key.clone(),
+                last_seqno: self.last_seqno,
+                last_pointer: self.last_pointer.clone(),
+            };
+            partition_insert(&snapshots, self.gdp_name().as_bytes(), serde_json::to_vec(&snapshot)?)?;
+        }
+
         Ok(header_hash)
     }
 

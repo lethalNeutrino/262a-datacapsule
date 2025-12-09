@@ -90,10 +90,25 @@ struct RecordContainer {
     records: Vec<(Option<RecordHeartbeat>, RecordHeader, Vec<u8>)>,
 }
 
+/// Snapshot of the capsule persisted to the keyspace. This struct intentionally
+/// excludes non-serializable items such as the in-memory `SigningKey`. It stores
+/// the capsule's metadata, symmetric key, and the last sequence pointer so the
+/// capsule can be reconstructed from storage.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct CapsuleSnapshot {
+    pub metadata: Metadata,
+    pub symmetric_key: Vec<u8>,
+    pub last_seqno: usize,
+    pub last_pointer: HashPointer,
+}
+
 #[derive(Default)]
 pub struct Capsule {
     pub metadata: Metadata,
     pub symmetric_key: Vec<u8>,
+    /// Optional in-memory signing key used by writers. This is not serialized
+    /// into the snapshot; callers that re-open a snapshot and require signing
+    /// capabilities should set this field after reconstructing the capsule.
     pub sign_key: Option<SigningKey>,
     pub last_seqno: usize,
     pub last_pointer: HashPointer,
@@ -103,4 +118,8 @@ pub struct Capsule {
     pub heartbeat_partition: Option<PartitionHandle>,
     // Per-capsule seqno -> header hash partition
     pub seqno_partition: Option<PartitionHandle>,
+    /// Optional key used in the keyspace for storing the serialized `CapsuleSnapshot`.
+    /// When present, callers should update the snapshot key after creating the capsule
+    /// so it can be persisted/updated as appends occur.
+    pub snapshot_key: Option<Vec<u8>>,
 }
