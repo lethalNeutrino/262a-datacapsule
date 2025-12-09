@@ -78,7 +78,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut capsule_reader =
         connection.get(capsule_writer.local_capsule.gdp_name(), encryption_key)?;
 
-    capsule_reader.read(header_hash)?;
+    let rec = capsule_reader.read(header_hash)?;
 
     // // Main loop spins ros.
     loop {

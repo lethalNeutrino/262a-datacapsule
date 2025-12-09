@@ -22,8 +22,10 @@ use serde::{Deserialize, Serialize};
 pub struct Connection<'a> {
     // Context that spawned the node
     pub ctx: r2r::Context,
-    // Node that needs to be repeatedly spun for this connection
-    pub node: r2r::Node,
+    // Node that needs to be repeatedly spun for this connection.
+    // Wrapped in `Rc<RefCell<_>>` so we can share a reference to the Node
+    // with returned readers without making the Node `Send`.
+    pub node: Rc<RefCell<r2r::Node>>,
     // Pool to spawn tasks
     pub pool: LocalPool,
     // UUID topic
@@ -46,23 +48,31 @@ impl<'a> Connection<'a> {
     /// Creates a new namespace with the given context and node name
     pub fn new() -> Result<Self> {
         let ctx = r2r::Context::create()?;
-        let mut node = r2r::Node::create(ctx.clone(), "node", "namespace")?;
-        let chatter_sub =
-            node.subscribe::<r2r::std_msgs::msg::String>("/chatter/client", QosProfile::default())?;
-        let chatter_pub = node.create_publisher::<r2r::std_msgs::msg::String>(
-            "/chatter/server",
-            QosProfile::default(),
-        )?;
+        let node_inner = r2r::Node::create(ctx.clone(), "node", "namespace")?;
+        let node = Rc::new(RefCell::new(node_inner));
+
+        // Use short-lived mutable borrows to call r2r APIs on the node.
+        let chatter_sub = node
+            .borrow_mut()
+            .subscribe::<r2r::std_msgs::msg::String>("/chatter/client", QosProfile::default())?;
+        let chatter_pub = node
+            .borrow_mut()
+            .create_publisher::<r2r::std_msgs::msg::String>(
+                "/chatter/server",
+                QosProfile::default(),
+            )?;
 
         let uuid = uuid::Uuid::new_v4().simple().to_string();
-        let uuid_sub = node.subscribe::<r2r::std_msgs::msg::String>(
+        let uuid_sub = node.borrow_mut().subscribe::<r2r::std_msgs::msg::String>(
             &format!("/machine_{}/client", uuid),
             QosProfile::default(),
         )?;
-        let uuid_pub = node.create_publisher::<r2r::std_msgs::msg::String>(
-            &format!("/machine_{}/server", uuid),
-            QosProfile::default(),
-        )?;
+        let uuid_pub = node
+            .borrow_mut()
+            .create_publisher::<r2r::std_msgs::msg::String>(
+                &format!("/machine_{}/server", uuid),
+                QosProfile::default(),
+            )?;
 
         let pool = LocalPool::new();
         Ok(Connection {
@@ -95,16 +105,22 @@ impl<'a> Connection<'a> {
         symmetric_key: Vec<u8>,
     ) -> Result<NetworkCapsuleWriter> {
         // Open new topic to talk to the servers
-        let subscriber = self.node.subscribe::<r2r::std_msgs::msg::String>(
-            &format!("/capsule_{}/client", metadata.hash_string()),
-            QosProfile::default(),
-        )?;
+        let subscriber = self
+            .node
+            .borrow_mut()
+            .subscribe::<r2r::std_msgs::msg::String>(
+                &format!("/capsule_{}/client", metadata.hash_string()),
+                QosProfile::default(),
+            )?;
         // Used to send a create request to the servers; a reply should be expected
         // on the topic specifically for this machine.
-        let publisher = self.node.create_publisher::<r2r::std_msgs::msg::String>(
-            &format!("/capsule_{}/server", metadata.hash_string()),
-            QosProfile::default(),
-        )?;
+        let publisher = self
+            .node
+            .borrow_mut()
+            .create_publisher::<r2r::std_msgs::msg::String>(
+                &format!("/capsule_{}/server", metadata.hash_string()),
+                QosProfile::default(),
+            )?;
 
         let gdp_name = metadata.hash_string();
 
@@ -147,14 +163,21 @@ impl<'a> Connection<'a> {
         symmetric_key: Vec<u8>,
     ) -> Result<NetworkCapsuleReader> {
         // Create the subscriber and publisher for this capsule.
-        let subscriber = self.node.subscribe::<r2r::std_msgs::msg::String>(
-            &format!("/capsule_{}/client", gdp_name),
-            QosProfile::default(),
-        )?;
-        let publisher = self.node.create_publisher::<r2r::std_msgs::msg::String>(
-            &format!("/capsule_{}/server", gdp_name),
-            QosProfile::default(),
-        )?;
+        // Borrow the node mutably for each r2r call (short-lived borrow).
+        let subscriber = self
+            .node
+            .borrow_mut()
+            .subscribe::<r2r::std_msgs::msg::String>(
+                &format!("/capsule_{}/client", gdp_name),
+                QosProfile::default(),
+            )?;
+        let publisher = self
+            .node
+            .borrow_mut()
+            .create_publisher::<r2r::std_msgs::msg::String>(
+                &format!("/capsule_{}/server", gdp_name),
+                QosProfile::default(),
+            )?;
 
         // Build and send the Get request.
         let request = DataCapsuleRequest::Get {
@@ -200,7 +223,9 @@ impl<'a> Connection<'a> {
         // This keeps everything on the same thread and avoids returning before
         // the response is available.
         while response_holder.borrow().is_none() {
-            self.node.spin_once(std::time::Duration::from_millis(100));
+            self.node
+                .borrow_mut()
+                .spin_once(std::time::Duration::from_millis(100));
             self.pool.run_until_stalled();
         }
 
@@ -233,6 +258,9 @@ impl<'a> Connection<'a> {
                 publisher,
             },
             local_capsule,
+            // Pass a clone of the shared node handle so the reader's `read`
+            // implementation can spin the node while waiting for replies.
+            node: Rc::clone(&self.node),
         })
     }
 }

@@ -32,5 +32,7 @@ pub enum DataCapsuleRequest {
         heartbeat: RecordHeartbeat,
         header: RecordHeader,
     },
-    ReadResponse,
+    ReadResponse {
+        record: Record,
+    },
 }
