@@ -45,14 +45,14 @@ impl SHA256Hashable for HashPointer {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct Record {
     pub header: RecordHeader,
     pub heartbeat: Option<RecordHeartbeat>,
     pub body: Vec<u8>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct RecordHeader {
     pub seqno: usize,
     pub gdp_name: String,
