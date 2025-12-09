@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use anyhow::Result;
 use capsule::{NetworkCapsuleReader, NetworkCapsuleWriter};
-use capsulelib::capsule::structs::{Capsule, Metadata, SHA256Hashable};
+use capsulelib::capsule::structs::{Capsule, Metadata, RecordHeader, SHA256Hashable};
 use capsulelib::requests::DataCapsuleRequest;
 use ed25519_dalek::SigningKey;
 use futures::{Stream, StreamExt, executor::LocalPool, task::LocalSpawnExt};
@@ -155,13 +155,21 @@ impl<'a> Connection<'a> {
             Capsule::create(kv_store_path, metadata.clone(), signing_key, symmetric_key)?;
         let metadata_record = local_capsule.peek()?;
 
+        // Create Header (will be used to check for existing capsule)
+        let metadata_header = RecordHeader {
+            seqno: 0,
+            gdp_name: gdp_name.to_string(),
+            prev_ptr: None,
+            hash_ptrs: Vec::new(),
+        };
+
         // Run the publisher in another task
         let request_id = uuid::Uuid::new_v4().to_string();
         let inner_msg = DataCapsuleRequest::Create {
             request_id: request_id.clone(),
             reply_to: self.topic.name.clone(),
             metadata: metadata.clone(),
-            header: metadata_record.header,
+            header: metadata_header,
             heartbeat: metadata_record.heartbeat.unwrap(),
         };
 

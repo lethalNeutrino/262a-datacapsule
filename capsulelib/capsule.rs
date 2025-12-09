@@ -57,6 +57,7 @@ impl Capsule {
 
         // Store metadata record in the capsule partition under the metadata header hash key,
         // and also store the heartbeat in the heartbeat partition under the same key.
+        debug!("metadata is {:?}", &metadata_record);
         debug!("inserting metadata at {:?}", &metadata_header_hash);
         partition_insert(
             &items,
