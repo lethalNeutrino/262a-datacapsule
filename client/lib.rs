@@ -62,8 +62,9 @@ impl<'a> Connection<'a> {
                 QosProfile::default(),
             )?;
 
-        // let uuid = uuid::Uuid::new_v4().simple().to_string();
-        let uuid = "abcdef".to_string();
+        let uuid = uuid::Uuid::new_v4().simple().to_string();
+        println!("uuid in new is: {}", uuid);
+        // let uuid = "abcdef".to_string();
         let uuid_sub = node.borrow_mut().subscribe::<r2r::std_msgs::msg::String>(
             &format!("/machine_{}/client", uuid),
             QosProfile::default(),
@@ -159,6 +160,7 @@ impl<'a> Connection<'a> {
 
         // publisher.publish();
 
+        println!("uuid in create is: {}", uuid);
         Ok(NetworkCapsuleWriter {
             uuid: self.topic.name.clone(),
             local_capsule,
@@ -262,6 +264,7 @@ impl<'a> Connection<'a> {
             Capsule::default()
         };
 
+        println!("uuid in get is: {}", uuid);
         Ok(NetworkCapsuleReader {
             uuid: self.topic.name.clone(),
             connection: Topic {
