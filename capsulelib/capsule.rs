@@ -71,6 +71,7 @@ impl Capsule {
         // Store seqno -> header mapping for seqno 0
         let seq0_key = 0usize.to_be_bytes().to_vec();
         partition_insert(&seqno_items, &seq0_key, metadata_header_hash.clone())?;
+        keyspace.persist(PersistMode::SyncAll)?;
 
         Ok(Capsule {
             symmetric_key,
@@ -227,6 +228,7 @@ impl Capsule {
             serde_json::to_vec(&snapshot)?,
         )?;
 
+        keyspace.persist(PersistMode::SyncAll)?;
         // Return created capsule (attach snapshot_key so future appends update it)
         Ok(Capsule {
             metadata: metadata.clone(),
