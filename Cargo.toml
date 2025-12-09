@@ -10,6 +10,8 @@ members = [
     "client",
     "examples/basic",
     "examples/test",
+    "examples/demo",
+    "examples/bench",
     "examples/networking_basic"
 ]
 
