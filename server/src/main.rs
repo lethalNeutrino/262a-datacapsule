@@ -40,11 +40,59 @@ struct NetworkCapsuleReader {
     local_capsule: Capsule,
 }
 
-fn handle_capsule_subscriber(gdp_name: String, request: String) {
-    println!("[{}] got capsule message: {}", gdp_name, request);
+fn handle_capsule_subscriber(
+    local_topics: Rc<RefCell<HashMap<String, Topic>>>,
+    gdp_name: String,
+    request: String,
+) {
+    // temporary bc i dont want to deal with communicating keys.
+    let encryption_key = (0..16).collect::<Vec<u8>>();
+    let mut local_capsule =
+        Capsule::get(".fjall_path".to_string(), gdp_name.clone(), encryption_key).unwrap();
+    match serde_json::from_str::<DataCapsuleRequest>(&request) {
+        Ok(DataCapsuleRequest::Append {
+            reply_to, record, ..
+        }) => {
+            let publisher = local_topics
+                .borrow()
+                .get(&reply_to)
+                .unwrap()
+                .publisher
+                .clone();
+            let response = DataCapsuleRequest::AppendAck {
+                header_hash: record.header.hash_string(),
+            };
+            local_capsule
+                .place(record.header, record.heartbeat.unwrap(), record.body)
+                .unwrap();
+            publisher.publish(&r2r::std_msgs::msg::String {
+                data: serde_json::to_string(&response).unwrap(),
+            });
+            println!("[{}] got capsule append request: {}", gdp_name, request);
+        }
+        Ok(_) => {
+            println!(
+                "[UNSUPPORTED] [{}] got capsule message: {}",
+                gdp_name, request
+            );
+        }
+        Err(_) => {
+            println!("[{}] got invalid capsule message: {}", gdp_name, request);
+        }
+    }
 }
 
-fn handle_machine_subscriber(uuid: String, request: String) {
+fn handle_machine_subscriber(
+    local_topics: Rc<RefCell<HashMap<String, Topic>>>,
+    uuid: String,
+    request: String,
+) {
+    // let publisher = local_topics
+    //     .borrow()
+    //     .get(&gdp_name)
+    //     .unwrap()
+    //     .publisher
+    //     .clone();
     println!("[{}] got machine message: {}", uuid, request);
 }
 
@@ -81,10 +129,15 @@ fn handle_new_connection<'a>(
 
         // Handle subscriber
         let inner_gdp_name = gdp_name.clone();
+        let capsule_inner_topics = Rc::clone(&local_topics);
         spawner_rc.borrow_mut().spawn_local(async move {
             subscriber
                 .for_each(move |msg| {
-                    handle_capsule_subscriber(inner_gdp_name.clone(), msg.data);
+                    handle_capsule_subscriber(
+                        capsule_inner_topics.clone(),
+                        inner_gdp_name.clone(),
+                        msg.data,
+                    );
                     future::ready(())
                 })
                 .await;
@@ -141,10 +194,15 @@ fn handle_new_connection<'a>(
 
         // Handle subscriber
         let inner_reply_to = reply_to.clone();
+        let machine_inner_topics = Rc::clone(&local_topics);
         spawner_rc.borrow_mut().spawn_local(async move {
             subscriber
                 .for_each(move |msg| {
-                    handle_machine_subscriber(inner_reply_to.clone(), msg.data);
+                    handle_machine_subscriber(
+                        machine_inner_topics.clone(),
+                        inner_reply_to.clone(),
+                        msg.data,
+                    );
                     future::ready(())
                 })
                 .await;
