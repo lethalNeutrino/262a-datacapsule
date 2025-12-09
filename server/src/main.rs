@@ -327,15 +327,21 @@ fn handle_get(
     // For now use a dummy symmetric key for testing.
     let symmetric_key: Vec<u8> = (0..16).collect::<Vec<u8>>();
 
-    let local_capsule = Capsule::get(
-        ".fjall_data".to_string(),
-        capsule_name.clone(),
-        symmetric_key,
-    )?;
+    let local_capsule = if local_capsules.borrow().contains_key(&capsule_name) {
+        local_capsules.borrow().get(&capsule_name).unwrap().clone()
+    } else {
+        let local_capsule = Capsule::get(
+            ".fjall_data".to_string(),
+            capsule_name.clone(),
+            symmetric_key,
+        )?;
 
-    local_capsules
-        .borrow_mut()
-        .insert(capsule_name.clone(), local_capsule.clone());
+        local_capsules
+            .borrow_mut()
+            .insert(capsule_name.clone(), local_capsule.clone());
+
+        local_capsule
+    };
 
     // Create Header
     let metadata_header = RecordHeader {

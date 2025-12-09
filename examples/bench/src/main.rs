@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use capsuleclient::Connection;
-use capsulelib::capsule::structs::{Metadata, SHA256Hashable};
+use capsulelib::capsule::structs::{Metadata, Record, SHA256Hashable};
 use capsulelib::requests::DataCapsuleRequest;
 use ed25519_dalek::SigningKey;
 use futures::{executor::LocalPool, future, stream::StreamExt, task::LocalSpawnExt};
@@ -55,7 +55,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     let mut header_hashes: Vec<Vec<u8>> = Vec::new();
-    for i in 1..=1000 {
+    for i in 1..=10 {
         header_hashes.push(
             capsule_writer.append(vec![], format!("Hello, World{}!", i).as_bytes().to_vec())?,
         );
@@ -64,32 +64,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut capsule_reader =
         connection.get(capsule_writer.local_capsule.gdp_name(), encryption_key)?;
 
+    let mut records: Vec<Record> = Vec::new();
     for hash in header_hashes {
-        println!("retrieved record {:?}", capsule_reader.read(hash)?);
+        let r = capsule_reader.read(hash)?;
+        debug!("retrieved record {:?}", r);
+        records.push(r);
     }
 
-    // connection.pool.spawner().spawn_local(async move {
-    //     capsule_writer
-    //         .topic
-    //         .subscriber
-    //         .for_each(|msg| {
-    //             println!("{}", &msg.data);
-    //             future::ready(())
-    //         })
-    //         .await
-    // })?;
+    for r in records.iter() {
+        info!(
+            "Record seqno: {}, data: {}",
+            r.header.seqno,
+            str::from_utf8(r.body.as_slice())?
+        );
+    }
 
-    // let mut capsule_reader =
-    //     connection.get(capsule_writer.local_capsule.gdp_name(), encryption_key)?;
-
-    // let rec = capsule_reader.read(header_hash)?;
-
-    // // Main loop spins ros.
     loop {
         connection
             .node
             .borrow_mut()
             .spin_once(std::time::Duration::from_millis(100));
         connection.pool.run_until_stalled();
+        if records.len() == 10 {
+            break;
+        }
     }
+
+    Ok(())
 }

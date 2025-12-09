@@ -67,12 +67,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut records: Vec<Record> = Vec::new();
     for hash in header_hashes {
         let r = capsule_reader.read(hash)?;
-        println!("retrieved record {:?}", r);
+        debug!("retrieved record {:?}", r);
         records.push(r);
     }
 
     for r in records {
-        println!(
+        info!(
             "Record seqno: {}, data: {}",
             r.header.seqno,
             str::from_utf8(r.body.as_slice())?
