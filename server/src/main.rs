@@ -63,6 +63,22 @@ fn handle_capsule_subscriber(
             handle_append(gdp_name, publisher, record, local_capsules)
                 .expect("Failed to append capsule");
         }
+        Ok(DataCapsuleRequest::Read {
+            reply_to,
+            header_hash,
+            ..
+        }) => {
+            println!("[{}] got capsule append request: {}", &gdp_name, request);
+            let publisher = local_topics
+                .borrow()
+                .get(&reply_to)
+                .unwrap()
+                .publisher
+                .clone();
+
+            handle_read(gdp_name, publisher, header_hash, local_capsules)
+                .expect("Failed to append capsule");
+        }
         Ok(_) => {
             println!(
                 "[UNSUPPORTED] [{}] got capsule message: {}",
@@ -400,9 +416,10 @@ fn handle_append(
 
 fn handle_read(
     capsule_name: String,
+    reply_to: Publisher<r2r::std_msgs::msg::String>,
     header: Vec<u8>,
     local_capsules: Rc<RefCell<HashMap<String, Capsule>>>,
-) -> Result<Vec<u8>> {
+) -> Result<()> {
     println!("reading data from capsule!");
 
     // For now use a dummy symmetric key for testing.
@@ -412,8 +429,12 @@ fn handle_read(
 
     // First, try to use a cached capsule (immutable borrow is sufficient for read).
     if let Some(cached) = local_capsules.borrow().get(&capsule_name) {
-        let record = cached.read(header_hash)?;
-        return Ok(record.body);
+        let record = cached.read(header_hash.clone())?;
+        let response = DataCapsuleRequest::ReadResponse { record };
+        reply_to.publish(&r2r::std_msgs::msg::String {
+            data: serde_json::to_string(&response).unwrap(),
+        })?;
+        return Ok(());
     }
 
     // Not cached: open the capsule, cache it, then read.
@@ -423,10 +444,12 @@ fn handle_read(
         symmetric_key,
     )?;
     let record = local_capsule.read(header_hash)?;
-    local_capsules
-        .borrow_mut()
-        .insert(capsule_name.clone(), local_capsule);
-    Ok(record.body)
+    let response = DataCapsuleRequest::ReadResponse { record };
+    reply_to.publish(&r2r::std_msgs::msg::String {
+        data: serde_json::to_string(&response).unwrap(),
+    })?;
+
+    Ok(())
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

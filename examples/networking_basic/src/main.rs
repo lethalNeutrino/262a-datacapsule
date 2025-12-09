@@ -54,9 +54,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         encryption_key.clone(),
     )?;
 
-    for i in (0..=1000) {
-        let header_hash =
-            capsule_writer.append(vec![], format!("Hello, World{}!", i).as_bytes().to_vec())?;
+    let mut header_hashes: Vec<Vec<u8>> = Vec::new();
+    for i in 1..=1000 {
+        header_hashes.push(
+            capsule_writer.append(vec![], format!("Hello, World{}!", i).as_bytes().to_vec())?,
+        );
+    }
+
+    let mut capsule_reader =
+        connection.get(capsule_writer.local_capsule.gdp_name(), encryption_key)?;
+
+    for hash in header_hashes {
+        println!("retrieved record {:?}", capsule_reader.read(hash)?);
     }
 
     // connection.pool.spawner().spawn_local(async move {
