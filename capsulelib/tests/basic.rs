@@ -155,3 +155,37 @@ fn place_unchecked_allows_inserting_tampered_heartbeat() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// Ensure creating the same capsule twice on the same store path succeeds and returns the existing capsule.
+#[test]
+fn create_twice_is_ok() -> anyhow::Result<()> {
+    // Use a deterministic seed and unique prefix so the test store path is unique
+    let seed = [33u8; 32];
+    let prefix = "capsule_create_twice";
+
+    // First creation via helper (which calls Capsule::create internally)
+    let (capsule1, signing_key, symmetric_key, store_path) = create_capsule_for_test(seed, prefix)?;
+
+    // Prepare metadata and attempt to create again using the same store path and keys
+    let metadata = make_metadata_for_signing_key(&signing_key);
+    let kv_store = store_path.as_path();
+
+    // Second create should detect existing capsule and return it (no error)
+    let capsule2 = Capsule::create(
+        kv_store,
+        metadata,
+        signing_key.clone(),
+        symmetric_key.clone(),
+    )?;
+
+    // Basic sanity: both capsules should have the same metadata hash (gdp name)
+    assert_eq!(
+        capsule1.metadata.hash_string(),
+        capsule2.metadata.hash_string()
+    );
+
+    // Also ensure peek returns a valid record for the existing capsule
+    let _ = capsule2.peek()?;
+
+    Ok(())
+}

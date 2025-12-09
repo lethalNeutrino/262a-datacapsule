@@ -32,3 +32,7 @@ pub struct NetworkCapsuleReader {
     pub connection: Topic,
     pub local_capsule: Capsule,
 }
+
+impl NetworkCapsuleReader {
+    pub fn latest_heartbeat() -> Result<Heartbeat> {}
+}

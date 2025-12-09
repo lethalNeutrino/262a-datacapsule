@@ -1,8 +1,10 @@
 mod capsule;
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
+use uuid::Uuid;
 
 use anyhow::Result;
 use capsule::{NetworkCapsuleReader, NetworkCapsuleWriter};
@@ -14,11 +16,24 @@ use futures::{Stream, StreamExt, executor::LocalPool, task::LocalSpawnExt};
 use r2r::{Publisher, QosProfile};
 use serde::{Deserialize, Serialize};
 
-pub struct Connection {
+// Struct representing a connection to the ROS2 network
+// Responsible for creating / connecting to capsules in
+// Writer / Read mode, respectively
+pub struct Connection<'a> {
+    // Context that spawned the node
     pub ctx: r2r::Context,
+    // Node that needs to be repeatedly spun for this connection
     pub node: r2r::Node,
+    // Pool to spawn tasks
     pub pool: LocalPool,
+    // UUID topic
+    pub topic: Topic,
+    // Chatter topic to broadcast to all servers
     pub chatter: Topic,
+
+    // HashMaps that store CapsuleName <-> Reader/Writer pairings
+    writers: HashMap<String, &'a NetworkCapsuleWriter>,
+    readers: HashMap<String, &'a NetworkCapsuleReader>,
 }
 
 pub struct Topic {
@@ -27,30 +42,51 @@ pub struct Topic {
     pub publisher: Publisher<r2r::std_msgs::msg::String>,
 }
 
-impl Connection {
+impl<'a> Connection<'a> {
     /// Creates a new namespace with the given context and node name
     pub fn new() -> Result<Self> {
         let ctx = r2r::Context::create()?;
         let mut node = r2r::Node::create(ctx.clone(), "node", "namespace")?;
-        let subscriber =
+        let chatter_sub =
             node.subscribe::<r2r::std_msgs::msg::String>("/chatter/client", QosProfile::default())?;
-        let publisher = node.create_publisher::<r2r::std_msgs::msg::String>(
+        let chatter_pub = node.create_publisher::<r2r::std_msgs::msg::String>(
             "/chatter/server",
             QosProfile::default(),
         )?;
+
+        let uuid = uuid::Uuid::new_v4().to_string();
+        let uuid_sub = node.subscribe::<r2r::std_msgs::msg::String>(
+            &format!("/machine_{}/client", uuid),
+            QosProfile::default(),
+        )?;
+        let uuid_pub = node.create_publisher::<r2r::std_msgs::msg::String>(
+            &format!("/machine_{}/server", uuid),
+            QosProfile::default(),
+        )?;
+
         let pool = LocalPool::new();
         Ok(Connection {
             ctx,
             node,
             pool,
+            topic: Topic {
+                name: uuid.clone(),
+                subscriber: Box::new(uuid_sub),
+                publisher: uuid_pub,
+            },
             chatter: Topic {
                 name: String::from("chatter"),
-                subscriber: Box::new(subscriber),
-                publisher,
+                subscriber: Box::new(chatter_sub),
+                publisher: chatter_pub,
             },
+            readers: HashMap::new(),
+            writers: HashMap::new(),
         })
     }
 
+    /// Given the same parameters that are used to create a datacapsule
+    /// locally, create a datacapsule on the server, as well as an in-
+    /// memory capsule that serves as the source of truth.
     pub fn create<P: AsRef<Path>>(
         &mut self,
         kv_store_path: P,
@@ -58,10 +94,13 @@ impl Connection {
         signing_key: SigningKey,
         symmetric_key: Vec<u8>,
     ) -> Result<NetworkCapsuleWriter> {
+        // Open new topic to talk to the servers
         let subscriber = self.node.subscribe::<r2r::std_msgs::msg::String>(
             &format!("/capsule_{}/client", metadata.hash_string()),
             QosProfile::default(),
         )?;
+        // Used to send a create request to the servers; a reply should be expected
+        // on the topic specifically for this machine.
         let publisher = self.node.create_publisher::<r2r::std_msgs::msg::String>(
             &format!("/capsule_{}/server", metadata.hash_string()),
             QosProfile::default(),
@@ -75,6 +114,7 @@ impl Connection {
 
         // Run the publisher in another task
         let inner_msg = DataCapsuleRequest::Create {
+            reply_to: self.topic.name.clone(),
             metadata: metadata.clone(),
             header: metadata_record.header,
             heartbeat: metadata_record.heartbeat.unwrap(),
@@ -193,20 +233,3 @@ impl Connection {
         })
     }
 }
-
-// impl<S, P> Topic<S, P>
-// where
-//     S: WrappedTypesupport + 'static,
-//     P: WrappedTypesupport + 'static,
-// {
-//     /// Creates a capsule in writer mode and returns a NetworkCapsuleWriter
-//     pub fn create(self, metadata: Metadata) -> Result<()> {
-//         let gdp_name = metadata.hash_string();
-//         Ok(())
-//     }
-
-//     /// Gets a capsule that has already been created in reader mode and returns a NetworkCapsuleReader
-//     pub fn get(self, metadata: Metadata) -> Result<()> {
-//         Ok(())
-//     }
-// }

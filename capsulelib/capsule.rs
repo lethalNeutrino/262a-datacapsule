@@ -129,7 +129,7 @@ impl Capsule {
         let gdp_name: &str = &metadata.hash_string();
         let (items, heartbeat_items, seqno_items) = init_partitions(&keyspace, gdp_name)?;
 
-        // Create Header
+        // Create Header (will be used to check for existing capsule)
         let metadata_header = RecordHeader {
             seqno: 0,
             gdp_name: gdp_name.to_string(),
@@ -139,7 +139,16 @@ impl Capsule {
 
         let metadata_header_hash = metadata_header.hash();
 
-        // Create Heartbeat
+        // If a metadata record already exists for this header hash, treat the capsule
+        // as existing and return the opened capsule (attach the signing key).
+        if let Some(_) = items.get(&metadata_header_hash)? {
+            // Capsule already exists on disk; open it via `get` and attach the sign_key.
+            let mut existing = Capsule::get(kv_store_path, gdp_name.to_string(), symmetric_key)?;
+            existing.sign_key = Some(sign_key);
+            return Ok(existing);
+        }
+
+        // Create Heartbeat (new capsule path)
         let metadata_heartbeat_data = RecordHeartbeatData {
             seqno: 0,
             gdp_name: gdp_name.to_string(),
@@ -255,6 +264,8 @@ impl Capsule {
             seqno_partition: Some(seqno_items),
             metadata,
             symmetric_key,
+            last_seqno: 0,
+            last_pointer: (0, metadata_header_hash.clone()),
             ..Default::default()
         })
     }

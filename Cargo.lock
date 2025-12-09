@@ -351,6 +351,7 @@ dependencies = [
  "r2r",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]

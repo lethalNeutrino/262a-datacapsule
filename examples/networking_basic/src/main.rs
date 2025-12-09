@@ -63,7 +63,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .for_each(|msg| {
                 // Parse the incoming request and call the appropriate handler.
                 match serde_json::from_str::<DataCapsuleRequest>(&msg.data) {
-                    Ok(DataCapsuleRequest::Ack) => {
+                    Ok(DataCapsuleRequest::CreateAck) => {
                         println!("got ack back from create");
                     }
                     Err(e) => {
