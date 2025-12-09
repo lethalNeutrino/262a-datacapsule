@@ -57,6 +57,7 @@ impl Capsule {
 
         // Store metadata record in the capsule partition under the metadata header hash key,
         // and also store the heartbeat in the heartbeat partition under the same key.
+        debug!("inserting metadata at {:?}", &metadata_header_hash);
         partition_insert(
             &items,
             &metadata_header_hash,
@@ -320,6 +321,7 @@ impl Capsule {
             hash_ptrs: Vec::new(),
         };
         let metadata_header_hash = metadata_header.hash();
+        debug!("looking for metadata at {:?}", &metadata_header_hash);
 
         let record_data = items.get(&metadata_header_hash)?.unwrap();
         let record: Record = serde_json::from_slice(&record_data)?;
