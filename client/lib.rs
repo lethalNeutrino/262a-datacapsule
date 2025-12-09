@@ -54,7 +54,7 @@ impl<'a> Connection<'a> {
             QosProfile::default(),
         )?;
 
-        let uuid = uuid::Uuid::new_v4().to_string();
+        let uuid = uuid::Uuid::new_v4().simple().to_string();
         let uuid_sub = node.subscribe::<r2r::std_msgs::msg::String>(
             &format!("/machine_{}/client", uuid),
             QosProfile::default(),
