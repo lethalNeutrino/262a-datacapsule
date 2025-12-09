@@ -228,6 +228,7 @@ impl<'a> Connection<'a> {
 
         loop {
             // send create
+            println!("resending create request due to no ack recieved");
             let msg = r2r::std_msgs::msg::String {
                 data: payload.clone(),
             };
