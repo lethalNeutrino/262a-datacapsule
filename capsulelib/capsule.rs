@@ -74,6 +74,7 @@ impl Capsule {
 
         Ok(Capsule {
             symmetric_key,
+            metadata,
             keyspace: Some(keyspace),
             record_partition: Some(items),
             heartbeat_partition: Some(heartbeat_items),
