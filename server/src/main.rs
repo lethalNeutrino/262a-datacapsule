@@ -56,6 +56,9 @@ fn handle_new_connection<'a>(
     gdp_name: String,
     request: &'a str,
 ) -> Result<()> {
+    let req = serde_json::from_str::<DataCapsuleRequest>(request)?;
+    println!("got connection request: {:?}", req);
+
     let (capsule_sub, capsule_pub): (
         Box<dyn Stream<Item = r2r::std_msgs::msg::String>>,
         Publisher<r2r::std_msgs::msg::String>,
