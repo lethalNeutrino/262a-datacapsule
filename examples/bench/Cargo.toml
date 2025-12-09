@@ -1,5 +1,5 @@
 [package]
-name = "networking_basic"
+name = "networking_benchmarks"
 version = "0.1.0"
 edition = "2024"
 

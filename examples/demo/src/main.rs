@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use capsuleclient::Connection;
-use capsulelib::capsule::structs::{Metadata, SHA256Hashable};
+use capsulelib::capsule::structs::{Metadata, Record, SHA256Hashable};
 use capsulelib::requests::DataCapsuleRequest;
 use ed25519_dalek::SigningKey;
 use futures::{executor::LocalPool, future, stream::StreamExt, task::LocalSpawnExt};
@@ -67,15 +67,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut records: Vec<Record> = Vec::new();
     for hash in header_hashes {
         let r = capsule_reader.read(hash)?;
-        println!("retrieved record {:?}" r);
+        println!("retrieved record {:?}", r);
         records.push(r);
     }
 
     for r in records {
         println!(
             "Record seqno: {}, data: {}",
-            r.seqno,
-            str::from_utf8(r.body)
+            r.header.seqno,
+            str::from_utf8(r.body.as_slice())?
         );
     }
 

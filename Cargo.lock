@@ -891,6 +891,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "networking_benchmarks"
+version = "0.1.0"
+dependencies = [
+ "datacapsule-capsulelib",
+ "datacapsule-userlib",
+ "ed25519-dalek",
+ "futures",
+ "log",
+ "pretty_env_logger",
+ "r2r",
+ "serde_json",
+]
+
+[[package]]
+name = "networking_demo"
+version = "0.1.0"
+dependencies = [
+ "datacapsule-capsulelib",
+ "datacapsule-userlib",
+ "ed25519-dalek",
+ "futures",
+ "log",
+ "pretty_env_logger",
+ "r2r",
+ "serde_json",
+]
+
+[[package]]
 name = "nom"
 version = "7.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
