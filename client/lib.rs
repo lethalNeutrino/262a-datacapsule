@@ -162,10 +162,14 @@ impl<'a> Connection<'a> {
             heartbeat: metadata_record.heartbeat.unwrap(),
         };
 
+        // Serialize the create request once so it can be reused for resends and for the
+        // short-lived task that publishes the initial announcement on the chatter topic.
+        let payload = serde_json::to_string(&inner_msg)?;
         let inner_pub = self.chatter.publisher.clone();
+        let payload_for_task = payload.clone();
         self.pool.spawner().spawn_local(async move {
             let msg = r2r::std_msgs::msg::String {
-                data: serde_json::to_string(&inner_msg).unwrap(),
+                data: payload_for_task,
             };
             inner_pub.publish(&msg).unwrap();
         })?;
@@ -173,6 +177,75 @@ impl<'a> Connection<'a> {
         // publisher.publish();
 
         println!("uuid in create is: {}", self.topic.name.clone());
+
+        // Wait for CreateAck on the machine topic, resending the create request until
+        // we get an Ack. We create a short-lived subscriber to /machine_{uuid}/client
+        // so we can watch for CreateAck messages. We reuse the existing pool and node
+        // to keep everything single-threaded.
+        use std::time::{Duration, Instant};
+
+        let response_holder: Rc<RefCell<Option<DataCapsuleRequest>>> = Rc::new(RefCell::new(None));
+        let holder_for_task = Rc::clone(&response_holder);
+
+        // Create a short-lived machine subscriber that will write CreateAck into the holder.
+        let machine_topic = format!("/machine_{}/client", self.topic.name);
+        let machine_sub = self
+            .node
+            .borrow_mut()
+            .subscribe::<r2r::std_msgs::msg::String>(&machine_topic, QosProfile::default())?;
+
+        self.pool.spawner().spawn_local(async move {
+            machine_sub
+                .for_each(move |msg| {
+                    if let Ok(parsed) = serde_json::from_str::<DataCapsuleRequest>(&msg.data) {
+                        match parsed {
+                            DataCapsuleRequest::CreateAck => {
+                                *holder_for_task.borrow_mut() = Some(DataCapsuleRequest::CreateAck);
+                            }
+                            _ => { /* ignore other messages */ }
+                        }
+                    }
+                    future::ready(())
+                })
+                .await;
+        })?;
+
+        // payload already serialized above and reused for resends
+
+        // Resend loop: publish create on chatter until we receive CreateAck or timeout.
+        let retry_interval = Duration::from_millis(500);
+        let mut attempts = 0usize;
+        let max_attempts = 40usize; // ~20s maximum (adjustable)
+
+        loop {
+            // send create
+            let msg = r2r::std_msgs::msg::String {
+                data: payload.clone(),
+            };
+            self.chatter.publisher.publish(&msg)?;
+
+            let start = Instant::now();
+            while response_holder.borrow().is_none() && start.elapsed() < retry_interval {
+                // spin node and run pool briefly
+                {
+                    let mut nb = self.node.borrow_mut();
+                    nb.spin_once(std::time::Duration::from_millis(50));
+                }
+                self.pool.run_until_stalled();
+            }
+
+            if response_holder.borrow().is_some() {
+                break;
+            }
+
+            attempts += 1;
+            if attempts >= max_attempts {
+                anyhow::bail!("no CreateAck received after {} attempts", attempts);
+            }
+
+            // otherwise loop and resend
+        }
+
         Ok(NetworkCapsuleWriter {
             uuid: self.topic.name.clone(),
             local_capsule,
@@ -206,16 +279,11 @@ impl<'a> Connection<'a> {
                 QosProfile::default(),
             )?;
 
-        // Build and send the Get request.
+        // Build the Get request (we will resend until we receive a GetResponse).
         let request = DataCapsuleRequest::Get {
             reply_to: self.topic.name.clone(),
             capsule_name: gdp_name.clone(),
         };
-        let msg = r2r::std_msgs::msg::String {
-            data: serde_json::to_string(&request).unwrap(),
-        };
-
-        self.chatter.publisher.publish(&msg)?;
 
         // Holder to receive the response from the spawned task.
         // We use Rc<RefCell<Option<...>>> so the async task can set the value
@@ -223,9 +291,8 @@ impl<'a> Connection<'a> {
         let response_holder: Rc<RefCell<Option<DataCapsuleRequest>>> = Rc::new(RefCell::new(None));
         let holder_for_task = Rc::clone(&response_holder);
 
-        // Move the subscriber into the spawned task. We do NOT keep the subscriber
-        // in the returned Topic; instead we return an empty subscriber (main-thread
-        // publisher access remains).
+        // Move the capsule subscriber into the spawned task which will set the holder
+        // when it sees a GetResponse for this capsule.
         self.pool.spawner().spawn_local(async move {
             subscriber
                 .for_each(move |msg| {
@@ -246,14 +313,42 @@ impl<'a> Connection<'a> {
                 .await
         })?;
 
-        // Spin the node and run the local task pool until we get a response.
-        // This keeps everything on the same thread and avoids returning before
-        // the response is available.
-        while response_holder.borrow().is_none() {
-            self.node
-                .borrow_mut()
-                .spin_once(std::time::Duration::from_millis(100));
-            self.pool.run_until_stalled();
+        // Prepare serialized payload for the Get request so we can resend cheaply.
+        let payload = serde_json::to_string(&request)?;
+
+        // Resend loop: publish Get on chatter until we receive GetResponse or timeout.
+        use std::time::{Duration, Instant};
+        let retry_interval = Duration::from_millis(500);
+        let mut attempts = 0usize;
+        let max_attempts = 40usize; // ~20s maximum (adjustable)
+
+        loop {
+            // publish the Get request
+            let msg = r2r::std_msgs::msg::String {
+                data: payload.clone(),
+            };
+            self.chatter.publisher.publish(&msg)?;
+
+            let start = Instant::now();
+            while response_holder.borrow().is_none() && start.elapsed() < retry_interval {
+                // spin node and run pool briefly
+                {
+                    let mut nb = self.node.borrow_mut();
+                    nb.spin_once(std::time::Duration::from_millis(50));
+                }
+                self.pool.run_until_stalled();
+            }
+
+            if response_holder.borrow().is_some() {
+                break;
+            }
+
+            attempts += 1;
+            if attempts >= max_attempts {
+                anyhow::bail!("no GetResponse received after {} attempts", attempts);
+            }
+
+            // otherwise loop and resend
         }
 
         // Optionally extract the parsed response if you need to inspect it here.
