@@ -153,7 +153,6 @@ impl<'a> Connection<'a> {
 
         let local_capsule =
             Capsule::create(kv_store_path, metadata.clone(), signing_key, symmetric_key)?;
-        let metadata_record = local_capsule.peek()?;
 
         // Create Header (will be used to check for existing capsule)
         let metadata_header = RecordHeader {
@@ -162,6 +161,8 @@ impl<'a> Connection<'a> {
             prev_ptr: None,
             hash_ptrs: Vec::new(),
         };
+
+        let metadata_record = local_capsule.read(metadata_header.hash())?;
 
         // Run the publisher in another task
         let request_id = uuid::Uuid::new_v4().to_string();

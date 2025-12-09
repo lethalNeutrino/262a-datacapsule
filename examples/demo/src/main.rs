@@ -31,10 +31,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(|b| format!("{:02x}", b))
             .collect::<String>()
     );
-    let metadata: BTreeMap<String, Vec<u8>> = BTreeMap::from([(
-        String::from("verify_key"),
-        generated_verify_key_bytes.to_vec(),
-    )]);
 
     let encryption_key = (0..16).collect::<Vec<u8>>();
 
