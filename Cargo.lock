@@ -272,9 +272,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "crypto",
+ "datacapsule-capsulelib",
  "fjall",
+ "futures",
+ "log",
  "r2r",
  "serde",
+ "serde_json",
  "sha2",
  "tokio",
 ]

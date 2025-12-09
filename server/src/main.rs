@@ -40,6 +40,144 @@ struct NetworkCapsuleReader {
     local_capsule: Capsule,
 }
 
+fn handle_capsule_subscriber(gdp_name: String, request: String) {
+    println!("[{}] got capsule message: {}", gdp_name, request);
+}
+
+fn handle_machine_subscriber(uuid: String, request: String) {
+    println!("[{}] got machine message: {}", uuid, request);
+}
+
+fn handle_new_connection<'a>(
+    node_rc: &Rc<RefCell<Node>>,
+    spawner_rc: Rc<RefCell<futures::executor::LocalSpawner>>,
+    local_topics: Rc<RefCell<HashMap<String, Topic>>>,
+    reply_to: String,
+    gdp_name: String,
+    request: &'a str,
+) -> Result<()> {
+    let (capsule_sub, capsule_pub): (
+        Box<dyn Stream<Item = r2r::std_msgs::msg::String>>,
+        Publisher<r2r::std_msgs::msg::String>,
+    ) = if local_topics.borrow().contains_key(&gdp_name) {
+        //Pub/Sub is already handled for this topic
+        let subscriber = Box::new(futures::stream::empty::<r2r::std_msgs::msg::String>());
+        let publisher = local_topics
+            .borrow()
+            .get(&gdp_name)
+            .unwrap()
+            .publisher
+            .clone();
+
+        (subscriber, publisher)
+    } else {
+        let subscriber = {
+            let mut node = node_rc.borrow_mut();
+            node.subscribe::<r2r::std_msgs::msg::String>(
+                &format!("/capsule_{}/server", gdp_name),
+                QosProfile::default(),
+            )?
+        };
+
+        // Handle subscriber
+        let inner_gdp_name = gdp_name.clone();
+        spawner_rc.borrow_mut().spawn_local(async move {
+            subscriber
+                .for_each(move |msg| {
+                    handle_capsule_subscriber(inner_gdp_name.clone(), msg.data);
+                    future::ready(())
+                })
+                .await;
+        })?;
+
+        let publisher = {
+            let mut node = node_rc.borrow_mut();
+            node.create_publisher::<r2r::std_msgs::msg::String>(
+                &format!("/capsule_{}/client", gdp_name),
+                QosProfile::default(),
+            )?
+        };
+
+        // We can't store the actual live subscriber (it will be moved into its own task),
+        // so to satisfy the `Topic` type we store an empty stream as the placeholder for subscriber.
+        let topic_entry = Topic {
+            name: gdp_name.clone(),
+            subscriber: Box::new(stream::empty::<r2r::std_msgs::msg::String>()),
+            publisher: publisher.clone(),
+        };
+
+        local_topics
+            .borrow_mut()
+            .insert(gdp_name.clone(), topic_entry);
+
+        (
+            Box::new(stream::empty::<r2r::std_msgs::msg::String>()),
+            publisher,
+        )
+    };
+
+    let (machine_sub, machine_pub): (
+        Box<dyn Stream<Item = r2r::std_msgs::msg::String>>,
+        Publisher<r2r::std_msgs::msg::String>,
+    ) = if local_topics.borrow().contains_key(&reply_to) {
+        //Pub/Sub is already handled for this topic
+        let subscriber = Box::new(futures::stream::empty::<r2r::std_msgs::msg::String>());
+        let publisher = local_topics
+            .borrow()
+            .get(&reply_to)
+            .unwrap()
+            .publisher
+            .clone();
+
+        (subscriber, publisher)
+    } else {
+        let subscriber = {
+            let mut node = node_rc.borrow_mut();
+            node.subscribe::<r2r::std_msgs::msg::String>(
+                &format!("/machine_{}/client", reply_to),
+                QosProfile::default(),
+            )?
+        };
+
+        // Handle subscriber
+        let inner_reply_to = reply_to.clone();
+        spawner_rc.borrow_mut().spawn_local(async move {
+            subscriber
+                .for_each(move |msg| {
+                    handle_machine_subscriber(inner_reply_to.clone(), msg.data);
+                    future::ready(())
+                })
+                .await;
+        })?;
+
+        let publisher = {
+            let mut node = node_rc.borrow_mut();
+            node.create_publisher::<r2r::std_msgs::msg::String>(
+                &format!("/machine_{}/client", reply_to.clone()),
+                QosProfile::default(),
+            )?
+        };
+
+        // We can't store the actual live subscriber (it will be moved into its own task),
+        // so to satisfy the `Topic` type we store an empty stream as the placeholder for subscriber.
+        let topic_entry = Topic {
+            name: reply_to.clone(),
+            subscriber: Box::new(stream::empty::<r2r::std_msgs::msg::String>()),
+            publisher: publisher.clone(),
+        };
+
+        local_topics
+            .borrow_mut()
+            .insert(reply_to.clone(), topic_entry);
+
+        (
+            Box::new(stream::empty::<r2r::std_msgs::msg::String>()),
+            publisher,
+        )
+    };
+    Ok(())
+}
+
 /// Create a capsule/topic and arrange for the subscriber to be processed on the local spawner.
 /// - `node_rc`: shared single-threaded Node handle (Rc<RefCell<Node>>)
 /// - `spawner_rc`: shared LocalSpawner (Rc<RefCell<LocalSpawner>>) so handlers can spawn local tasks
@@ -49,7 +187,7 @@ fn handle_create(
     node_rc: &Rc<RefCell<Node>>,
     spawner_rc: Rc<RefCell<futures::executor::LocalSpawner>>,
     local_topics: Rc<RefCell<HashMap<String, Topic>>>,
-    shared_index: Arc<Mutex<HashMap<String, String>>>,
+    reply_to: String,
     metadata: Metadata,
     heartbeat: RecordHeartbeat,
     header: RecordHeader,
@@ -60,70 +198,22 @@ fn handle_create(
     // Temporary symmetric key for testing
     let symmetric_key: Vec<u8> = (0..16).collect::<Vec<u8>>();
 
-    // Create subscriber/publisher with a short mutable borrow of the node
-    let subscriber = {
-        let mut node = node_rc.borrow_mut();
-        node.subscribe::<r2r::std_msgs::msg::String>(
-            &format!("/capsule_{}/server", metadata.hash_string()),
-            QosProfile::default(),
-        )?
-    };
-
-    let publisher = {
-        let mut node = node_rc.borrow_mut();
-        node.create_publisher::<r2r::std_msgs::msg::String>(
-            &format!("/capsule_{}/client", metadata.hash_string()),
-            QosProfile::default(),
-        )?
-    };
-
     // Send initial ack (if that variant exists)
-    let _ = publisher.publish(&r2r::std_msgs::msg::String {
-        data: serde_json::to_string(&DataCapsuleRequest::CreateAck)?,
-    });
+    // let _ = machine_pub.publish(&r2r::std_msgs::msg::String {
+    //     data: serde_json::to_string(&DataCapsuleRequest::CreateAck)?,
+    // });
 
-    // Insert a lightweight record into the thread-safe shared index so other threads can see this capsule
-    {
-        let mut idx = shared_index.lock().unwrap();
-        idx.insert(
-            gdp_name.clone(),
-            format!("/capsule_{}/client", metadata.hash_string()),
-        );
-    }
-
-    // Store publisher in local map so main thread can publish later if needed.
-    // We can't store the actual live subscriber (it will be moved into its own task),
-    // so to satisfy the `Topic` type we store an empty stream as the placeholder for subscriber.
-    let topic_entry = Topic {
-        name: gdp_name.clone(),
-        subscriber: Box::new(stream::empty::<r2r::std_msgs::msg::String>()),
-        publisher,
-    };
-    local_topics
-        .borrow_mut()
-        .insert(gdp_name.clone(), topic_entry);
-
-    // Spawn a task to process incoming messages on the subscriber.
-    // Use the LocalSpawner wrapped in Rc<RefCell<..>> (single-threaded).
-    {
-        // Clone what the task needs.
-        let capsule_name_for_task = gdp_name.clone();
-        // Move the actual subscriber into the task so it can `.for_each`.
-        let mut spawner = spawner_rc.borrow_mut();
-        let spawn_result = spawner.spawn_local(async move {
-            subscriber
-                .for_each(move |msg| {
-                    println!("[{}] capsule message: {}", capsule_name_for_task, msg.data);
-                    future::ready(())
-                })
-                .await;
-        });
-
-        if let Err(e) = spawn_result {
-            // spawn failed; log but continue. We return success for the capsule creation itself.
-            eprintln!("failed to spawn subscriber task for {}: {:?}", gdp_name, e);
-        }
-    }
+    // // Store publisher in local map so main thread can publish later if needed.
+    // // We can't store the actual live subscriber (it will be moved into its own task),
+    // // so to satisfy the `Topic` type we store an empty stream as the placeholder for subscriber.
+    // let topic_entry = Topic {
+    //     name: gdp_name.clone(),
+    //     subscriber: Box::new(stream::empty::<r2r::std_msgs::msg::String>()),
+    //     publisher,
+    // };
+    // local_topics
+    //     .borrow_mut()
+    //     .insert(gdp_name.clone(), topic_entry);
 
     info!("capsule created!");
     Capsule::open(
@@ -272,9 +362,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Local main-thread map of topics (publishers etc.)
     let local_topics: Rc<RefCell<HashMap<String, Topic>>> = Rc::new(RefCell::new(HashMap::new()));
 
-    // Thread-safe shared index usable from other threads (only stores simple data).
-    let shared_index: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
-
     // Create initial chatter subscriber/publisher/timer with short borrows.
     let subscriber = {
         let mut n = node_rc.borrow_mut();
@@ -293,14 +380,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let node_for_task = Rc::clone(&node_rc);
     let spawner_for_task = Rc::clone(&spawner_rc);
     let local_topics_for_task = Rc::clone(&local_topics);
-    let shared_index_for_task = Arc::clone(&shared_index);
 
     // Spawn the chatter subscriber handler on the local spawner.
     {
         // Move clones into the async closure; they will be cloned per-message when needed.
         let spawner_clone_for_handle = spawner_for_task.clone();
         let local_topics_clone_for_handle = local_topics_for_task.clone();
-        let shared_index_clone_for_handle = shared_index_for_task.clone();
 
         let spawner_ref = spawner_for_task.borrow_mut();
         let spawn_res = spawner_ref.spawn_local(async move {
@@ -311,32 +396,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .for_each(move |msg| {
                     match serde_json::from_str::<DataCapsuleRequest>(&msg.data) {
                         Ok(DataCapsuleRequest::Create {
-                            reply_to,
-                            metadata,
-                            heartbeat,
-                            header,
+                            reply_to, metadata, ..
                         }) => {
                             // Clone the Rc/Arc for this invocation so we don't move the owned values
                             let spawner_for_call = spawner_clone_for_handle.clone();
                             let local_topics_for_call = local_topics_clone_for_handle.clone();
-                            let shared_index_for_call = shared_index_clone_for_handle.clone();
+                            let reply_to_clone = reply_to.clone();
+                            let gdp_name = metadata.clone().hash_string();
 
-                            match handle_create(
+                            handle_new_connection(
                                 &node_for_task,
                                 spawner_for_call,
                                 local_topics_for_call,
-                                shared_index_for_call,
-                                metadata,
-                                heartbeat,
-                                header,
-                            ) {
-                                Ok(_) => {
-                                    println!("Capsule created!");
-                                }
-                                Err(e) => {
-                                    eprintln!("creation failed: {}", e);
-                                }
-                            }
+                                reply_to_clone,
+                                gdp_name,
+                                &msg.data,
+                            );
                         }
                         Ok(DataCapsuleRequest::Get {
                             reply_to,
@@ -344,28 +419,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }) => {
                             let spawner_for_call = spawner_clone_for_handle.clone();
                             let local_topics_for_call = local_topics_clone_for_handle.clone();
-                            let shared_index_for_call = shared_index_clone_for_handle.clone();
-
-                            match handle_get(
+                            let capsule_name_clone = capsule_name.clone();
+                            handle_new_connection(
                                 &node_for_task,
                                 spawner_for_call,
                                 local_topics_for_call,
-                                shared_index_for_call,
-                                capsule_name,
-                            ) {
-                                Ok(_) => {
-                                    println!("Capsule created!");
-                                }
-                                Err(e) => {
-                                    eprintln!("creation failed: {}", e);
-                                }
-                            }
+                                reply_to,
+                                capsule_name_clone,
+                                &msg.data,
+                            );
                         }
                         Err(e) => {
                             println!("It's bwoken: {}", e);
                         }
                         _ => {
-                            println!("chatter should only be used for create requests; ignoring");
+                            println!(
+                                "chatter should only be used for create or get requests; ignoring"
+                            );
                         }
                     };
                     future::ready(())
