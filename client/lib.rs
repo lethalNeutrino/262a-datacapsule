@@ -163,6 +163,7 @@ impl<'a> Connection<'a> {
         };
 
         let metadata_record = local_capsule.read(metadata_header.hash())?;
+        debug!("metadata in client lib create is {:?}", &metadata_record);
 
         // Run the publisher in another task
         let request_id = uuid::Uuid::new_v4().to_string();
