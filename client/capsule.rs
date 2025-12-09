@@ -98,7 +98,7 @@ impl NetworkCapsuleReader {
         // Run the local pool AND spin the r2r node until we get a record.
         while record_holder.borrow().is_none() {
             // Spin the shared node so ROS messages are delivered to the subscriber.
-            println!("here")
+            println!("here");
             self.node
                 .borrow_mut()
                 .spin_once(std::time::Duration::from_millis(100));
