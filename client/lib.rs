@@ -13,6 +13,7 @@ use capsulelib::requests::DataCapsuleRequest;
 use ed25519_dalek::SigningKey;
 use futures::{Stream, StreamExt, executor::LocalPool, task::LocalSpawnExt};
 use futures::{future, stream};
+use log::{debug, info, warn};
 use r2r::{Publisher, QosProfile};
 use serde::{Deserialize, Serialize};
 
@@ -63,7 +64,7 @@ impl<'a> Connection<'a> {
             )?;
 
         let uuid = uuid::Uuid::new_v4().simple().to_string();
-        println!("uuid in new is: {}", uuid);
+        debug!("uuid in new is: {}", uuid);
         // let uuid = "abcdef".to_string();
         let uuid_sub = node.borrow_mut().subscribe::<r2r::std_msgs::msg::String>(
             &format!("/machine_{}/client", uuid),
@@ -95,7 +96,7 @@ impl<'a> Connection<'a> {
         pool.spawner().spawn_local(async move {
             uuid_sub
                 .for_each(move |msg| {
-                    println!("[{}] got machine message: {}", inner_uuid, &msg.data);
+                    info!("[{}] got machine message: {}", inner_uuid, &msg.data);
                     future::ready(())
                 })
                 .await;
@@ -178,7 +179,7 @@ impl<'a> Connection<'a> {
 
         // publisher.publish();
 
-        println!("uuid in create is: {}", self.topic.name.clone());
+        debug!("uuid in create is: {}", self.topic.name.clone());
 
         // Wait for CreateAck on the machine topic, resending the create request until
         // we get an Ack. We create a short-lived subscriber to /machine_{uuid}/client
@@ -228,7 +229,7 @@ impl<'a> Connection<'a> {
 
         loop {
             // send create
-            println!("resending create request due to no ack recieved");
+            info!("resending create request due to no ack recieved");
             let msg = r2r::std_msgs::msg::String {
                 data: payload.clone(),
             };
@@ -322,7 +323,7 @@ impl<'a> Connection<'a> {
                             // other messages ignored for now
                         }
                         Err(e) => {
-                            println!("It's bwoken: {}", e);
+                            warn!("It's bwoken: {}", e);
                         }
                     };
                     future::ready(())
@@ -370,7 +371,7 @@ impl<'a> Connection<'a> {
 
         // Optionally extract the parsed response if you need to inspect it here.
         let parsed = response_holder.borrow_mut().take().unwrap();
-        println!("got back {:?}", parsed);
+        debug!("got back {:?}", parsed);
         let local_capsule = if let DataCapsuleRequest::GetResponse {
             metadata,
             heartbeat,
@@ -388,7 +389,7 @@ impl<'a> Connection<'a> {
             Capsule::default()
         };
 
-        println!("uuid in get is: {}", self.topic.name.clone());
+        debug!("uuid in get is: {}", self.topic.name.clone());
         Ok(NetworkCapsuleReader {
             uuid: self.topic.name.clone(),
             connection: Topic {

@@ -12,7 +12,7 @@ use futures::executor::LocalSpawner;
 use futures::{
     Stream, executor::LocalPool, future, stream, stream::StreamExt, task::LocalSpawnExt,
 };
-use log::{debug, info};
+use log::{debug, error, info, warn};
 use r2r::{Context, Node};
 use r2r::{Publisher, QosProfile};
 
@@ -52,7 +52,7 @@ fn handle_capsule_subscriber(
         Ok(DataCapsuleRequest::Append {
             reply_to, record, ..
         }) => {
-            println!("[{}] got capsule append request: {}", &gdp_name, request);
+            info!("[{}] got capsule append request: {}", &gdp_name, request);
             let publisher = local_topics
                 .borrow()
                 .get(&reply_to)
@@ -68,7 +68,7 @@ fn handle_capsule_subscriber(
             header_hash,
             ..
         }) => {
-            println!("[{}] got capsule append request: {}", &gdp_name, request);
+            info!("[{}] got capsule append request: {}", &gdp_name, request);
             let publisher = local_topics
                 .borrow()
                 .get(&reply_to)
@@ -80,13 +80,13 @@ fn handle_capsule_subscriber(
                 .expect("Failed to append capsule");
         }
         Ok(_) => {
-            println!(
+            warn!(
                 "[UNSUPPORTED] [{}] got capsule message: {}",
                 gdp_name, request
             );
         }
         Err(_) => {
-            println!("[{}] got invalid capsule message: {}", gdp_name, request);
+            error!("[{}] got invalid capsule message: {}", gdp_name, request);
         }
     }
 }
@@ -103,7 +103,7 @@ fn handle_machine_subscriber(
     //     .unwrap()
     //     .publisher
     //     .clone();
-    println!("[{}] got machine message: {}", uuid, request);
+    info!("[{}] got machine message: {}", uuid, request);
     // The local_capsules map is available here for future logic.
 }
 
@@ -250,7 +250,7 @@ fn handle_new_connection<'a>(
         )
     };
     let req = serde_json::from_str::<DataCapsuleRequest>(request)?;
-    println!("got connection request: {:?}", req);
+    info!("got connection request: {:?}", req);
 
     match req {
         DataCapsuleRequest::Create {
@@ -272,7 +272,7 @@ fn handle_new_connection<'a>(
         DataCapsuleRequest::Get { capsule_name, .. } => {
             handle_get(machine_pub, capsule_name, Rc::clone(&local_capsules))?;
         }
-        _ => println!("Chatter topic should only be used for create and get requests, ignoring"),
+        _ => warn!("Chatter topic should only be used for create and get requests, ignoring"),
     }
 
     Ok(())
@@ -323,7 +323,7 @@ fn handle_get(
     capsule_name: String,
     local_capsules: Rc<RefCell<HashMap<String, Capsule>>>,
 ) -> Result<()> {
-    println!("getting capsule!");
+    info!("getting capsule!");
     // For now use a dummy symmetric key for testing.
     let symmetric_key: Vec<u8> = (0..16).collect::<Vec<u8>>();
 
@@ -366,7 +366,7 @@ fn handle_append(
     record: Record,
     local_capsules: Rc<RefCell<HashMap<String, Capsule>>>,
 ) -> Result<()> {
-    println!("appending data to capsule!");
+    debug!("appending data to capsule!");
 
     // For now use a dummy symmetric key for testing.
     let symmetric_key: Vec<u8> = (0..16).collect::<Vec<u8>>();
@@ -375,7 +375,7 @@ fn handle_append(
     {
         let mut map = local_capsules.borrow_mut();
         if let Some(capsule) = map.get_mut(&capsule_name) {
-            println!("capsule metadata: {:?}", capsule.metadata);
+            debug!("capsule metadata: {:?}", capsule.metadata);
             let response = DataCapsuleRequest::AppendAck {
                 header_hash: record.header.hash_string(),
             };
@@ -420,7 +420,7 @@ fn handle_read(
     header: Vec<u8>,
     local_capsules: Rc<RefCell<HashMap<String, Capsule>>>,
 ) -> Result<()> {
-    println!("reading data from capsule!");
+    debug!("reading data from capsule!");
 
     // For now use a dummy symmetric key for testing.
     let symmetric_key: Vec<u8> = (0..16).collect::<Vec<u8>>();
@@ -453,6 +453,7 @@ fn handle_read(
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    pretty_env_logger::init();
     // Create the ROS2 context and node.
     let ctx = r2r::Context::create()?;
     let node = r2r::Node::create(ctx, "node", "namespace")?;
@@ -548,10 +549,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ).expect("Failed to handle new connection");
                         }
                         Err(e) => {
-                            println!("It's bwoken: {}", e);
+                            error!("It's bwoken: {}", e);
                         }
                         _ => {
-                            println!(
+                            warn!(
                                 "chatter should only be used for create or get requests; ignoring"
                             );
                         }

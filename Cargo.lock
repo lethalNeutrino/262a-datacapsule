@@ -326,6 +326,7 @@ dependencies = [
  "datacapsule-capsulelib",
  "futures",
  "log",
+ "pretty_env_logger",
  "r2r",
  "serde_json",
 ]
@@ -352,6 +353,7 @@ dependencies = [
  "datacapsule-capsulelib",
  "ed25519-dalek",
  "futures",
+ "log",
  "r2r",
  "serde",
  "serde_json",
