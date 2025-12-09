@@ -201,7 +201,8 @@ fn snapshot_roundtrip() -> anyhow::Result<()> {
     let prefix = "capsule_snapshot_flow";
 
     // Create capsule using helper (this calls Capsule::create and writes initial snapshot)
-    let (mut capsule, _signing_key, symmetric_key, store_path) = create_capsule_for_test(seed, prefix)?;
+    let (mut capsule, _signing_key, symmetric_key, store_path) =
+        create_capsule_for_test(seed, prefix)?;
 
     // Append a record so the snapshot is updated after append
     let payload = b"snapshot payload".to_vec();
@@ -230,6 +231,28 @@ fn snapshot_roundtrip() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn has_header_hash_works() -> anyhow::Result<()> {
+    // Create a test capsule and append a record, then verify has_header_hash reports presence.
+    let seed = [123u8; 32];
+    let prefix = "capsule_has_header_test";
+
+    let (mut capsule, _signing_key, _symmetric_key, _store_path) =
+        create_capsule_for_test(seed, prefix)?;
+
+    // Append a record and get its header hash
+    let header_hash = capsule.append(vec![], b"presence payload".to_vec())?;
+
+    // The capsule should report that this header hash exists
+    assert!(capsule.has_header_hash(&header_hash)?);
+
+    // And a random/fake hash should not be present
+    let fake_hash = vec![0u8; 32];
+    assert!(!capsule.has_header_hash(&fake_hash)?);
+
+    Ok(())
+}
+
 /// Verify that the persisted snapshot is updated after append().
 #[test]
 fn snapshot_updated_on_append() -> anyhow::Result<()> {
@@ -237,7 +260,8 @@ fn snapshot_updated_on_append() -> anyhow::Result<()> {
     let seed = [99u8; 32];
     let prefix = "capsule_snapshot_update";
 
-    let (mut capsule, _signing_key, _symmetric_key, _store_path) = create_capsule_for_test(seed, prefix)?;
+    let (mut capsule, _signing_key, _symmetric_key, _store_path) =
+        create_capsule_for_test(seed, prefix)?;
     let gdp_name = capsule.metadata.hash_string();
 
     // Append a record which should trigger snapshot update in append()
@@ -252,7 +276,9 @@ fn snapshot_updated_on_append() -> anyhow::Result<()> {
         "capsule_snapshots",
         PartitionCreateOptions::default().max_memtable_size(8 * 1024 * 1024),
     )?;
-    let snap_bytes = snaps.get(gdp_name.as_bytes())?.expect("snapshot should exist");
+    let snap_bytes = snaps
+        .get(gdp_name.as_bytes())?
+        .expect("snapshot should exist");
     let snap: CapsuleSnapshot = serde_json::from_slice(&snap_bytes)?;
 
     assert_eq!(snap.last_seqno, capsule.last_seqno);

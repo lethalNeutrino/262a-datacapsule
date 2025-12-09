@@ -225,6 +225,7 @@ impl<'a> Connection<'a> {
         };
 
         Ok(NetworkCapsuleReader {
+            uuid: self.topic.name.clone(),
             connection: Topic {
                 name: gdp_name,
                 // we moved the real subscriber into the spawned task; return an empty placeholder

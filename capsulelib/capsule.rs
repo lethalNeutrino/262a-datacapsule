@@ -15,8 +15,6 @@ use utils::{
     init_partitions, partition_insert, sign_heartbeat_with_key, verify_heartbeat_with_metadata,
 };
 
-
-
 pub type Aes128Ctr64LE = ctr::Ctr64LE<aes::Aes128>;
 
 use anyhow::{Result, bail};
@@ -148,13 +146,18 @@ impl Capsule {
             if let Some(snapshot_bytes) = snapshots.get(gdp_name.as_bytes())? {
                 let snapshot: CapsuleSnapshot = serde_json::from_slice(&snapshot_bytes)?;
                 // Reopen partitions and reconstruct the Capsule using snapshot info
-                let mut existing = Capsule::get(kv_store_path, gdp_name.to_string(), snapshot.symmetric_key.clone())?;
+                let mut existing = Capsule::get(
+                    kv_store_path,
+                    gdp_name.to_string(),
+                    snapshot.symmetric_key.clone(),
+                )?;
                 existing.sign_key = Some(sign_key);
                 existing.snapshot_key = Some(gdp_name.as_bytes().to_vec());
                 return Ok(existing);
             }
             // If no snapshot present, fall back to `get` behavior
-            let mut existing = Capsule::get(kv_store_path, gdp_name.to_string(), symmetric_key.clone())?;
+            let mut existing =
+                Capsule::get(kv_store_path, gdp_name.to_string(), symmetric_key.clone())?;
             existing.sign_key = Some(sign_key);
             return Ok(existing);
         }
@@ -217,7 +220,11 @@ impl Capsule {
             last_seqno: 0,
             last_pointer: (0, metadata_header.hash()),
         };
-        partition_insert(&snapshots, gdp_name.as_bytes(), serde_json::to_vec(&snapshot)?)?;
+        partition_insert(
+            &snapshots,
+            gdp_name.as_bytes(),
+            serde_json::to_vec(&snapshot)?,
+        )?;
 
         // Return created capsule (attach snapshot_key so future appends update it)
         Ok(Capsule {
@@ -440,7 +447,11 @@ impl Capsule {
                 last_seqno: self.last_seqno,
                 last_pointer: self.last_pointer.clone(),
             };
-            partition_insert(&snapshots, self.gdp_name().as_bytes(), serde_json::to_vec(&snapshot)?)?;
+            partition_insert(
+                &snapshots,
+                self.gdp_name().as_bytes(),
+                serde_json::to_vec(&snapshot)?,
+            )?;
         }
 
         Ok(header_hash)
@@ -498,6 +509,18 @@ impl Capsule {
         }
 
         Ok(record)
+    }
+
+    /// Check whether a record with the given header hash exists in this capsule's record partition.
+    /// Returns `Ok(true)` if present, `Ok(false)` if absent, or an `Err` if the partition is not opened
+    /// or if the underlying store operation fails.
+    pub fn has_header_hash(&self, header_hash: &[u8]) -> Result<bool> {
+        let items = self
+            .record_partition
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("record partition not opened"))?;
+        // `get` returns an Option; propagate any underlying error from the keyspace API.
+        Ok(items.get(header_hash)?.is_some())
     }
     pub fn peek(&self) -> Result<Record> {
         self.read(self.last_pointer.1.clone())

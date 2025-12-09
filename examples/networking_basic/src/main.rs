@@ -51,10 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         encryption_key.clone(),
     )?;
 
-    capsule_writer.append(vec![], "Hello, World!".as_bytes().to_vec())?;
-
-    let mut capsule_reader =
-        connection.get(capsule_writer.local_capsule.gdp_name(), encryption_key)?;
+    let header_hash = capsule_writer.append(vec![], "Hello, World!".as_bytes().to_vec())?;
 
     connection.pool.spawner().spawn_local(async move {
         capsule_writer
@@ -77,6 +74,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             })
             .await
     })?;
+
+    let mut capsule_reader =
+        connection.get(capsule_writer.local_capsule.gdp_name(), encryption_key)?;
+
+    capsule_reader.read(header_hash)?;
 
     // // Main loop spins ros.
     loop {
