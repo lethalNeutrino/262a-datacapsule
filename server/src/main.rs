@@ -79,7 +79,7 @@ fn handle_create(
 
     // Send initial ack (if that variant exists)
     let _ = publisher.publish(&r2r::std_msgs::msg::String {
-        data: serde_json::to_string(&DataCapsuleRequest::Ack)?,
+        data: serde_json::to_string(&DataCapsuleRequest::CreateAck)?,
     });
 
     // Insert a lightweight record into the thread-safe shared index so other threads can see this capsule
@@ -311,6 +311,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .for_each(move |msg| {
                     match serde_json::from_str::<DataCapsuleRequest>(&msg.data) {
                         Ok(DataCapsuleRequest::Create {
+                            reply_to,
                             metadata,
                             heartbeat,
                             header,
@@ -337,7 +338,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                         }
-                        Ok(DataCapsuleRequest::Get { capsule_name }) => {
+                        Ok(DataCapsuleRequest::Get {
+                            reply_to,
+                            capsule_name,
+                        }) => {
                             let spawner_for_call = spawner_clone_for_handle.clone();
                             let local_topics_for_call = local_topics_clone_for_handle.clone();
                             let shared_index_for_call = shared_index_clone_for_handle.clone();

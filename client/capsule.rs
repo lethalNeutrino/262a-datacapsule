@@ -34,5 +34,7 @@ pub struct NetworkCapsuleReader {
 }
 
 impl NetworkCapsuleReader {
-    pub fn latest_heartbeat() -> Result<RecordHeartbeat> {}
+    pub fn latest_heartbeat() -> Result<RecordHeartbeat> {
+        todo!()
+    }
 }
