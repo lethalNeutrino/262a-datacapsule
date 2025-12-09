@@ -77,6 +77,18 @@ impl<'a> Connection<'a> {
                 QosProfile::default(),
             )?;
 
+        uuid_pub.publish(&r2r::std_msgs::msg::String {
+            data: "priming".to_string(),
+        })?;
+
+        uuid_pub.publish(&r2r::std_msgs::msg::String {
+            data: "priming1".to_string(),
+        })?;
+
+        uuid_pub.publish(&r2r::std_msgs::msg::String {
+            data: "priming2".to_string(),
+        })?;
+
         let pool = LocalPool::new();
 
         let inner_uuid = uuid.clone();
@@ -160,7 +172,7 @@ impl<'a> Connection<'a> {
 
         // publisher.publish();
 
-        println!("uuid in create is: {}", uuid);
+        println!("uuid in create is: {}", self.topic.name.clone());
         Ok(NetworkCapsuleWriter {
             uuid: self.topic.name.clone(),
             local_capsule,
@@ -264,7 +276,7 @@ impl<'a> Connection<'a> {
             Capsule::default()
         };
 
-        println!("uuid in get is: {}", uuid);
+        println!("uuid in get is: {}", self.topic.name.clone());
         Ok(NetworkCapsuleReader {
             uuid: self.topic.name.clone(),
             connection: Topic {

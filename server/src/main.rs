@@ -178,6 +178,18 @@ fn handle_new_connection<'a>(
     let req = serde_json::from_str::<DataCapsuleRequest>(request)?;
     println!("got connection request: {:?}", req);
 
+    machine_pub.publish(&r2r::std_msgs::msg::String {
+        data: "priming".to_string(),
+    })?;
+
+    machine_pub.publish(&r2r::std_msgs::msg::String {
+        data: "priming2".to_string(),
+    })?;
+
+    machine_pub.publish(&r2r::std_msgs::msg::String {
+        data: "priming3".to_string(),
+    })?;
+
     match req {
         DataCapsuleRequest::Create {
             header,
