@@ -84,6 +84,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         connection
             .node
+            .borrow_mut()
             .spin_once(std::time::Duration::from_millis(100));
         connection.pool.run_until_stalled();
     }
