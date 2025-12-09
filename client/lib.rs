@@ -62,11 +62,19 @@ impl<'a> Connection<'a> {
                 QosProfile::default(),
             )?;
 
-        let uuid = uuid::Uuid::new_v4().simple().to_string();
+        // let uuid = uuid::Uuid::new_v4().simple().to_string();
+        let uuid = "abcdef".to_string();
         let uuid_sub = node.borrow_mut().subscribe::<r2r::std_msgs::msg::String>(
             &format!("/machine_{}/client", uuid),
             QosProfile::default(),
         )?;
+
+        let uuid_pub = node
+            .borrow_mut()
+            .create_publisher::<r2r::std_msgs::msg::String>(
+                &format!("/machine_{}/server", uuid),
+                QosProfile::default(),
+            )?;
 
         let pool = LocalPool::new();
 
@@ -79,13 +87,6 @@ impl<'a> Connection<'a> {
                 })
                 .await;
         })?;
-
-        let uuid_pub = node
-            .borrow_mut()
-            .create_publisher::<r2r::std_msgs::msg::String>(
-                &format!("/machine_{}/server", uuid),
-                QosProfile::default(),
-            )?;
 
         Ok(Connection {
             ctx,

@@ -39,11 +39,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let encryption_key = (0..16).collect::<Vec<u8>>();
 
     let mut connection = Connection::new()?;
+
     let metadata_map: BTreeMap<String, Vec<u8>> = BTreeMap::from([(
         String::from("verify_key"),
         generated_verify_key_bytes.to_vec(),
     )]);
+
     let metadata = Metadata(metadata_map);
+
     let mut capsule_writer = connection.create(
         data_path,
         metadata,
@@ -53,32 +56,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let header_hash = capsule_writer.append(vec![], "Hello, World!".as_bytes().to_vec())?;
 
-    connection.pool.spawner().spawn_local(async move {
-        capsule_writer
-            .topic
-            .subscriber
-            .for_each(|msg| {
-                // Parse the incoming request and call the appropriate handler.
-                match serde_json::from_str::<DataCapsuleRequest>(&msg.data) {
-                    Ok(DataCapsuleRequest::CreateAck) => {
-                        println!("got ack back from create");
-                    }
-                    Err(e) => {
-                        println!("It's bwoken: {}", e);
-                    }
-                    _ => {
-                        println!("not yet implemented");
-                    }
-                };
-                future::ready(())
-            })
-            .await
-    })?;
+    // connection.pool.spawner().spawn_local(async move {
+    //     capsule_writer
+    //         .topic
+    //         .subscriber
+    //         .for_each(|msg| {
+    //             println!("{}", &msg.data);
+    //             future::ready(())
+    //         })
+    //         .await
+    // })?;
 
-    let mut capsule_reader =
-        connection.get(capsule_writer.local_capsule.gdp_name(), encryption_key)?;
+    // let mut capsule_reader =
+    //     connection.get(capsule_writer.local_capsule.gdp_name(), encryption_key)?;
 
-    let rec = capsule_reader.read(header_hash)?;
+    // let rec = capsule_reader.read(header_hash)?;
 
     // // Main loop spins ros.
     loop {
