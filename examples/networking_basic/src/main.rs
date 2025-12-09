@@ -54,7 +54,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         encryption_key.clone(),
     )?;
 
-    let header_hash = capsule_writer.append(vec![], "Hello, World!".as_bytes().to_vec())?;
+    for i in (0..=1000) {
+        let header_hash =
+            capsule_writer.append(vec![], format!("Hello, World{}!", i).as_bytes().to_vec())?;
+    }
 
     // connection.pool.spawner().spawn_local(async move {
     //     capsule_writer
