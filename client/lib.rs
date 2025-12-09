@@ -11,8 +11,8 @@ use capsule::{NetworkCapsuleReader, NetworkCapsuleWriter};
 use capsulelib::capsule::structs::{Capsule, Metadata, SHA256Hashable};
 use capsulelib::requests::DataCapsuleRequest;
 use ed25519_dalek::SigningKey;
-use futures::future;
 use futures::{Stream, StreamExt, executor::LocalPool, task::LocalSpawnExt};
+use futures::{future, stream};
 use r2r::{Publisher, QosProfile};
 use serde::{Deserialize, Serialize};
 
@@ -67,6 +67,19 @@ impl<'a> Connection<'a> {
             &format!("/machine_{}/client", uuid),
             QosProfile::default(),
         )?;
+
+        let pool = LocalPool::new();
+
+        let inner_uuid = uuid.clone();
+        pool.spawner().spawn_local(async move {
+            uuid_sub
+                .for_each(move |msg| {
+                    println!("[{}] got machine message: {}", inner_uuid, &msg.data);
+                    future::ready(())
+                })
+                .await;
+        })?;
+
         let uuid_pub = node
             .borrow_mut()
             .create_publisher::<r2r::std_msgs::msg::String>(
@@ -74,14 +87,13 @@ impl<'a> Connection<'a> {
                 QosProfile::default(),
             )?;
 
-        let pool = LocalPool::new();
         Ok(Connection {
             ctx,
             node,
             pool,
             topic: Topic {
                 name: uuid.clone(),
-                subscriber: Box::new(uuid_sub),
+                subscriber: Box::new(stream::empty::<r2r::std_msgs::msg::String>()),
                 publisher: uuid_pub,
             },
             chatter: Topic {
