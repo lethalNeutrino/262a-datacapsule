@@ -301,10 +301,17 @@ impl<'a> Connection<'a> {
         let response_holder: Rc<RefCell<Option<DataCapsuleRequest>>> = Rc::new(RefCell::new(None));
         let holder_for_task = Rc::clone(&response_holder);
 
+        // Create a short-lived machine subscriber that will write GetResponse into the holder.
+        let machine_topic = format!("/machine_{}/client", self.topic.name);
+        let machine_sub = self
+            .node
+            .borrow_mut()
+            .subscribe::<r2r::std_msgs::msg::String>(&machine_topic, QosProfile::default())?;
+
         // Move the capsule subscriber into the spawned task which will set the holder
         // when it sees a GetResponse for this capsule.
         self.pool.spawner().spawn_local(async move {
-            subscriber
+            machine_sub
                 .for_each(move |msg| {
                     match serde_json::from_str::<DataCapsuleRequest>(&msg.data) {
                         Ok(res @ DataCapsuleRequest::GetResponse { .. }) => {
