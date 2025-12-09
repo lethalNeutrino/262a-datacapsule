@@ -359,6 +359,7 @@ fn handle_append(
     {
         let mut map = local_capsules.borrow_mut();
         if let Some(capsule) = map.get_mut(&capsule_name) {
+            println!("capsule metadata: {:?}", capsule.metadata);
             let response = DataCapsuleRequest::AppendAck {
                 header_hash: record.header.hash_string(),
             };
