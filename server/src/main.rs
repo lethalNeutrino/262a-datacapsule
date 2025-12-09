@@ -398,7 +398,7 @@ fn handle_append(
 
     // Not cached: open, append, and cache.
     let mut local_capsule = Capsule::get(
-        ".fjall_data/".to_string(),
+        ".fjall_data".to_string(),
         capsule_name.clone(),
         symmetric_key,
     )?;
@@ -445,7 +445,7 @@ fn handle_read(
 
     // Not cached: open the capsule, cache it, then read.
     let local_capsule = Capsule::get(
-        ".fjall_data/".to_string(),
+        ".fjall_data".to_string(),
         capsule_name.clone(),
         symmetric_key,
     )?;
