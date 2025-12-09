@@ -102,7 +102,7 @@ pub struct CapsuleSnapshot {
     pub last_pointer: HashPointer,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Capsule {
     pub metadata: Metadata,
     pub symmetric_key: Vec<u8>,

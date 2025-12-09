@@ -42,33 +42,26 @@ struct NetworkCapsuleReader {
 
 fn handle_capsule_subscriber(
     local_topics: Rc<RefCell<HashMap<String, Topic>>>,
+    local_capsules: Rc<RefCell<HashMap<String, Capsule>>>,
     gdp_name: String,
     request: String,
 ) {
     // temporary bc i dont want to deal with communicating keys.
     let encryption_key = (0..16).collect::<Vec<u8>>();
-    let mut local_capsule =
-        Capsule::get(".fjall_path".to_string(), gdp_name.clone(), encryption_key).unwrap();
     match serde_json::from_str::<DataCapsuleRequest>(&request) {
         Ok(DataCapsuleRequest::Append {
             reply_to, record, ..
         }) => {
+            println!("[{}] got capsule append request: {}", &gdp_name, request);
             let publisher = local_topics
                 .borrow()
                 .get(&reply_to)
                 .unwrap()
                 .publisher
                 .clone();
-            let response = DataCapsuleRequest::AppendAck {
-                header_hash: record.header.hash_string(),
-            };
-            local_capsule
-                .place(record.header, record.heartbeat.unwrap(), record.body)
-                .unwrap();
-            publisher.publish(&r2r::std_msgs::msg::String {
-                data: serde_json::to_string(&response).unwrap(),
-            });
-            println!("[{}] got capsule append request: {}", gdp_name, request);
+
+            handle_append(gdp_name, publisher, record, local_capsules)
+                .expect("Failed to append capsule");
         }
         Ok(_) => {
             println!(
@@ -84,6 +77,7 @@ fn handle_capsule_subscriber(
 
 fn handle_machine_subscriber(
     local_topics: Rc<RefCell<HashMap<String, Topic>>>,
+    local_capsules: Rc<RefCell<HashMap<String, Capsule>>>,
     uuid: String,
     request: String,
 ) {
@@ -94,12 +88,14 @@ fn handle_machine_subscriber(
     //     .publisher
     //     .clone();
     println!("[{}] got machine message: {}", uuid, request);
+    // The local_capsules map is available here for future logic.
 }
 
 fn handle_new_connection<'a>(
     node_rc: &Rc<RefCell<Node>>,
     spawner_rc: Rc<RefCell<futures::executor::LocalSpawner>>,
     local_topics: Rc<RefCell<HashMap<String, Topic>>>,
+    local_capsules: Rc<RefCell<HashMap<String, Capsule>>>,
     reply_to: String,
     gdp_name: String,
     request: &'a str,
@@ -130,11 +126,13 @@ fn handle_new_connection<'a>(
         // Handle subscriber
         let inner_gdp_name = gdp_name.clone();
         let capsule_inner_topics = Rc::clone(&local_topics);
+        let capsule_inner_capsules = Rc::clone(&local_capsules);
         spawner_rc.borrow_mut().spawn_local(async move {
             subscriber
                 .for_each(move |msg| {
                     handle_capsule_subscriber(
                         capsule_inner_topics.clone(),
+                        capsule_inner_capsules.clone(),
                         inner_gdp_name.clone(),
                         msg.data,
                     );
@@ -195,11 +193,13 @@ fn handle_new_connection<'a>(
         // Handle subscriber
         let inner_reply_to = reply_to.clone();
         let machine_inner_topics = Rc::clone(&local_topics);
+        let machine_inner_capsules = Rc::clone(&local_capsules);
         spawner_rc.borrow_mut().spawn_local(async move {
             subscriber
                 .for_each(move |msg| {
                     handle_machine_subscriber(
                         machine_inner_topics.clone(),
+                        machine_inner_capsules.clone(),
                         inner_reply_to.clone(),
                         msg.data,
                     );
@@ -244,10 +244,17 @@ fn handle_new_connection<'a>(
             metadata,
             ..
         } => {
-            handle_create(machine_pub, request_id, metadata, heartbeat, header)?;
+            handle_create(
+                machine_pub,
+                request_id,
+                metadata,
+                heartbeat,
+                header,
+                Rc::clone(&local_capsules),
+            )?;
         }
         DataCapsuleRequest::Get { capsule_name, .. } => {
-            handle_get(machine_pub, capsule_name)?;
+            handle_get(machine_pub, capsule_name, Rc::clone(&local_capsules))?;
         }
         _ => println!("Chatter topic should only be used for create and get requests, ignoring"),
     }
@@ -266,7 +273,8 @@ fn handle_create(
     metadata: Metadata,
     heartbeat: RecordHeartbeat,
     header: RecordHeader,
-) -> Result<Capsule> {
+    local_capsules: Rc<RefCell<HashMap<String, Capsule>>>,
+) -> Result<()> {
     info!("creating capsule!");
     let gdp_name = metadata.hash_string();
 
@@ -279,16 +287,26 @@ fn handle_create(
     });
 
     info!("capsule created!");
-    Capsule::open(
+    let local_capsule = Capsule::open(
         ".fjall_data".to_string(),
-        metadata,
+        metadata.clone(),
         header,
         heartbeat,
         symmetric_key,
-    )
+    )?;
+
+    local_capsules
+        .borrow_mut()
+        .insert(metadata.hash_string(), local_capsule);
+
+    Ok(())
 }
 
-fn handle_get(reply_to: Publisher<r2r::std_msgs::msg::String>, capsule_name: String) -> Result<()> {
+fn handle_get(
+    reply_to: Publisher<r2r::std_msgs::msg::String>,
+    capsule_name: String,
+    local_capsules: Rc<RefCell<HashMap<String, Capsule>>>,
+) -> Result<()> {
     println!("getting capsule!");
     // For now use a dummy symmetric key for testing.
     let symmetric_key: Vec<u8> = (0..16).collect::<Vec<u8>>();
@@ -298,6 +316,10 @@ fn handle_get(reply_to: Publisher<r2r::std_msgs::msg::String>, capsule_name: Str
         capsule_name.clone(),
         symmetric_key,
     )?;
+
+    local_capsules
+        .borrow_mut()
+        .insert(capsule_name.clone(), local_capsule.clone());
 
     // Create Header
     let metadata_header = RecordHeader {
@@ -322,22 +344,88 @@ fn handle_get(reply_to: Publisher<r2r::std_msgs::msg::String>, capsule_name: Str
     Ok(())
 }
 
-fn handle_append(capsule_name: String, record: Record) -> Result<()> {
+fn handle_append(
+    capsule_name: String,
+    reply_to: Publisher<r2r::std_msgs::msg::String>,
+    record: Record,
+    local_capsules: Rc<RefCell<HashMap<String, Capsule>>>,
+) -> Result<()> {
     println!("appending data to capsule!");
 
     // For now use a dummy symmetric key for testing.
     let symmetric_key: Vec<u8> = (0..16).collect::<Vec<u8>>();
 
-    let mut local_capsule = Capsule::get(".fjall_data/".to_string(), capsule_name, symmetric_key)?;
+    // Try to reuse a cached capsule if present, otherwise open and cache it.
+    {
+        let mut map = local_capsules.borrow_mut();
+        if let Some(capsule) = map.get_mut(&capsule_name) {
+            let response = DataCapsuleRequest::AppendAck {
+                header_hash: record.header.hash_string(),
+            };
+            capsule.place(record.header, record.heartbeat.unwrap(), record.body)?;
+            reply_to
+                .publish(&r2r::std_msgs::msg::String {
+                    data: serde_json::to_string(&response).unwrap(),
+                })
+                .expect("Publishing failed");
+            info!("appended to cached capsule");
+            return Ok(());
+        }
+    }
+
+    // Not cached: open, append, and cache.
+    let mut local_capsule = Capsule::get(
+        ".fjall_data/".to_string(),
+        capsule_name.clone(),
+        symmetric_key,
+    )?;
+    let response = DataCapsuleRequest::AppendAck {
+        header_hash: record.header.hash_string(),
+    };
     local_capsule.place(record.header, record.heartbeat.unwrap(), record.body)?;
-    info!("capsule created!");
+    reply_to
+        .publish(&r2r::std_msgs::msg::String {
+            data: serde_json::to_string(&response).unwrap(),
+        })
+        .expect("Publishing failed");
+    info!("appended to newly opened capsule");
+
+    local_capsules
+        .borrow_mut()
+        .insert(capsule_name.clone(), local_capsule);
 
     Ok(())
 }
 
-fn handle_read(capsule_name: String, header: Vec<u8>) -> Result<Vec<u8>> {
+fn handle_read(
+    capsule_name: String,
+    header: Vec<u8>,
+    local_capsules: Rc<RefCell<HashMap<String, Capsule>>>,
+) -> Result<Vec<u8>> {
     println!("reading data from capsule!");
-    todo!()
+
+    // For now use a dummy symmetric key for testing.
+    let symmetric_key: Vec<u8> = (0..16).collect::<Vec<u8>>();
+
+    let header_hash = header;
+
+    // First, try to use a cached capsule (immutable borrow is sufficient for read).
+    if let Some(cached) = local_capsules.borrow().get(&capsule_name) {
+        let record = cached.read(header_hash)?;
+        return Ok(record.body);
+    }
+
+    // Not cached: open the capsule, cache it, then read.
+    let local_capsule = Capsule::get(
+        ".fjall_data/".to_string(),
+        capsule_name.clone(),
+        symmetric_key,
+    )?;
+    let record = local_capsule.read(header_hash)?;
+    local_capsules
+        .borrow_mut()
+        .insert(capsule_name.clone(), local_capsule);
+    Ok(record.body)
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -357,6 +445,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Local main-thread map of topics (publishers etc.)
     let local_topics: Rc<RefCell<HashMap<String, Topic>>> = Rc::new(RefCell::new(HashMap::new()));
 
+    // Local main-thread map of in-memory Capsules (shared with handlers)
+    let local_capsules: Rc<RefCell<HashMap<String, Capsule>>> =
+        Rc::new(RefCell::new(HashMap::new()));
+
     // Create initial chatter subscriber/publisher/timer with short borrows.
     let subscriber = {
         let mut n = node_rc.borrow_mut();
@@ -375,12 +467,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let node_for_task = Rc::clone(&node_rc);
     let spawner_for_task = Rc::clone(&spawner_rc);
     let local_topics_for_task = Rc::clone(&local_topics);
+    let local_capsules_for_task = Rc::clone(&local_capsules);
 
     // Spawn the chatter subscriber handler on the local spawner.
     {
         // Move clones into the async closure; they will be cloned per-message when needed.
         let spawner_clone_for_handle = spawner_for_task.clone();
         let local_topics_clone_for_handle = local_topics_for_task.clone();
+        let local_capsules_clone_for_handle = local_capsules_for_task.clone();
 
         let spawner_ref = spawner_for_task.borrow_mut();
         let spawn_res =
@@ -397,6 +491,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // Clone the Rc/Arc for this invocation so we don't move the owned values
                             let spawner_for_call = spawner_clone_for_handle.clone();
                             let local_topics_for_call = local_topics_clone_for_handle.clone();
+                            let local_capsules_for_call = local_capsules_clone_for_handle.clone();
                             let reply_to_clone = reply_to.clone();
                             let gdp_name = metadata.clone().hash_string();
 
@@ -404,6 +499,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 &node_for_task,
                                 spawner_for_call,
                                 local_topics_for_call,
+                                local_capsules_for_call,
                                 reply_to_clone,
                                 gdp_name,
                                 &msg.data,
@@ -415,11 +511,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }) => {
                             let spawner_for_call = spawner_clone_for_handle.clone();
                             let local_topics_for_call = local_topics_clone_for_handle.clone();
+                            let local_capsules_for_call = local_capsules_clone_for_handle.clone();
                             let capsule_name_clone = capsule_name.clone();
                             handle_new_connection(
                                 &node_for_task,
                                 spawner_for_call,
                                 local_topics_for_call,
+                                local_capsules_for_call,
                                 reply_to,
                                 capsule_name_clone,
                                 &msg.data,
