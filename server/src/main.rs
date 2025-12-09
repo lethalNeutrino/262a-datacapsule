@@ -192,12 +192,13 @@ fn handle_new_connection<'a>(
 
     match req {
         DataCapsuleRequest::Create {
+            request_id,
             header,
             heartbeat,
             metadata,
             ..
         } => {
-            handle_create(machine_pub, metadata, heartbeat, header)?;
+            handle_create(machine_pub, request_id, metadata, heartbeat, header)?;
         }
         DataCapsuleRequest::Get { capsule_name, .. } => {
             handle_get(machine_pub, capsule_name)?;
@@ -215,6 +216,7 @@ fn handle_new_connection<'a>(
 /// - `shared_index`: thread-safe (Arc<Mutex<...>>) lightweight index with capsule -> endpoint info
 fn handle_create(
     reply_to: Publisher<r2r::std_msgs::msg::String>,
+    request_id: String,
     metadata: Metadata,
     heartbeat: RecordHeartbeat,
     header: RecordHeader,
@@ -227,7 +229,7 @@ fn handle_create(
 
     // Send initial ack (if that variant exists)
     let _ = reply_to.publish(&r2r::std_msgs::msg::String {
-        data: serde_json::to_string(&DataCapsuleRequest::CreateAck)?,
+        data: serde_json::to_string(&DataCapsuleRequest::CreateAck { request_id })?,
     });
 
     info!("capsule created!");

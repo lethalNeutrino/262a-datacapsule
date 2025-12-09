@@ -155,7 +155,9 @@ impl<'a> Connection<'a> {
         let metadata_record = local_capsule.peek()?;
 
         // Run the publisher in another task
+        let request_id = uuid::Uuid::new_v4().to_string();
         let inner_msg = DataCapsuleRequest::Create {
+            request_id: request_id.clone(),
             reply_to: self.topic.name.clone(),
             metadata: metadata.clone(),
             header: metadata_record.header,
@@ -199,8 +201,15 @@ impl<'a> Connection<'a> {
                 .for_each(move |msg| {
                     if let Ok(parsed) = serde_json::from_str::<DataCapsuleRequest>(&msg.data) {
                         match parsed {
-                            DataCapsuleRequest::CreateAck => {
-                                *holder_for_task.borrow_mut() = Some(DataCapsuleRequest::CreateAck);
+                            DataCapsuleRequest::CreateAck {
+                                request_id: ack_request_id,
+                            } => {
+                                if ack_request_id == request_id {
+                                    *holder_for_task.borrow_mut() =
+                                        Some(DataCapsuleRequest::CreateAck {
+                                            request_id: ack_request_id,
+                                        });
+                                }
                             }
                             _ => { /* ignore other messages */ }
                         }
