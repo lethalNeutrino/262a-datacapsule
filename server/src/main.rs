@@ -134,7 +134,7 @@ fn handle_new_connection<'a>(
         let subscriber = {
             let mut node = node_rc.borrow_mut();
             node.subscribe::<r2r::std_msgs::msg::String>(
-                &format!("/machine_{}/client", reply_to),
+                &format!("/machine_{}/server", reply_to),
                 QosProfile::default(),
             )?
         };
@@ -323,11 +323,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let local_topics_clone_for_handle = local_topics_for_task.clone();
 
         let spawner_ref = spawner_for_task.borrow_mut();
-        let spawn_res = spawner_ref.spawn_local(async move {
-            // We own the clones inside this async closure. For each incoming message
-            // we will clone them again before passing to `handle_create`, which avoids
-            // moving the captured values out of the FnMut closure.
-            subscriber
+        let spawn_res =
+            spawner_ref.spawn_local(async move {
+                // We own the clones inside this async closure. For each incoming message
+                // we will clone them again before passing to `handle_create`, which avoids
+                // moving the captured values out of the FnMut closure.
+                subscriber
                 .for_each(move |msg| {
                     match serde_json::from_str::<DataCapsuleRequest>(&msg.data) {
                         Ok(DataCapsuleRequest::Create {
@@ -346,7 +347,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 reply_to_clone,
                                 gdp_name,
                                 &msg.data,
-                            );
+                            ).expect("Failed to handle new connection");
                         }
                         Ok(DataCapsuleRequest::Get {
                             reply_to,
@@ -362,7 +363,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 reply_to,
                                 capsule_name_clone,
                                 &msg.data,
-                            );
+                            ).expect("Failed to handle new connection");
                         }
                         Err(e) => {
                             println!("It's bwoken: {}", e);
@@ -376,7 +377,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     future::ready(())
                 })
                 .await;
-        });
+            });
 
         if let Err(e) = spawn_res {
             eprintln!("failed to spawn chatter handler: {:?}", e);
