@@ -85,6 +85,7 @@ impl Capsule {
             heartbeat_partition: Some(heartbeat_items),
             seqno_partition: Some(seqno_items),
             last_seqno: 0,
+            last_pointer: (0, metadata_header_hash.clone()),
             ..Default::default()
         })
     }
