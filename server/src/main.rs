@@ -357,6 +357,11 @@ fn handle_get(
 
     let metadata_header_hash = metadata_header.hash();
     let metadata_record = local_capsule.read(metadata_header_hash)?;
+    // Capsule::read now returns a RecordContainer; extract the head metadata record.
+    let metadata_record = metadata_record
+        .head()
+        .cloned()
+        .expect("metadata record missing");
 
     // Send initial ack (if that variant exists)
     let _ = reply_to.publish(&r2r::std_msgs::msg::String {
@@ -444,11 +449,10 @@ fn handle_read(
 
     // First, try to use a cached capsule (immutable borrow is sufficient for read).
     if let Some(cached) = local_capsules.borrow().get(&capsule_name) {
-        let record = cached.read(header_hash.clone())?;
+        // `read` now returns a RecordContainer; forward it directly in the response.
+        let container = cached.read(header_hash.clone())?;
         let response = DataCapsuleRequest::ReadResponse {
-            record_container: RecordContainer {
-                records: vec![record],
-            },
+            record_container: container,
         };
         reply_to.publish(&r2r::std_msgs::msg::String {
             data: serde_json::to_string(&response).unwrap(),
@@ -462,11 +466,10 @@ fn handle_read(
         capsule_name.clone(),
         symmetric_key,
     )?;
-    let record = local_capsule.read(header_hash)?;
+    // `read` now returns a `RecordContainer`; forward it directly in the response.
+    let container = local_capsule.read(header_hash)?;
     let response = DataCapsuleRequest::ReadResponse {
-        record_container: RecordContainer {
-            records: vec![record],
-        },
+        record_container: container,
     };
     reply_to.publish(&r2r::std_msgs::msg::String {
         data: serde_json::to_string(&response).unwrap(),

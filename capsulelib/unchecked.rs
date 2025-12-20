@@ -14,9 +14,11 @@ use anyhow::{Result, bail};
 use serde_json;
 
 /// Read a record without verifying heartbeat signatures. Intended for benchmarks
-/// or debugging where signature checks should be skipped.
+/// or debugging where signature checks should be skipped. Returns a `RecordContainer`
+/// where the last element is the head (most recent) record. This mirrors the
+/// checked `read` API which now returns a `RecordContainer`.
 impl Capsule {
-    pub fn read_unchecked(&self, header_hash: Vec<u8>) -> Result<Record> {
+    pub fn read_unchecked(&self, header_hash: Vec<u8>) -> Result<RecordContainer> {
         let record_bytes = self
             .record_partition
             .as_ref()
@@ -57,7 +59,10 @@ impl Capsule {
 
         // NOTE: Intentionally do not verify the heartbeat signature in this unchecked variant.
 
-        Ok(record)
+        // Wrap the single record into a RecordContainer to match the checked `read` API.
+        Ok(RecordContainer {
+            records: vec![record],
+        })
     }
 
     /// Insert a heartbeat into the per-capsule heartbeat partition without verifying

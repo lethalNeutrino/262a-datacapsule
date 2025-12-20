@@ -54,7 +54,11 @@ fn main() -> anyhow::Result<()> {
             .collect::<String>()
     );
 
-    let record = capsule.read(header_hash)?;
+    let record_container = capsule.read(header_hash)?;
+    let record = record_container
+        .head()
+        .cloned()
+        .expect("record should be present");
     info!("Read data (decrypted): {:?}", str::from_utf8(&record.body)?);
     Ok(())
 }

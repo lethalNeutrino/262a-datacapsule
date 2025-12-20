@@ -163,7 +163,11 @@ impl<'a> Connection<'a> {
             data_hash: gdp_name.clone(),
         };
 
-        let metadata_record = local_capsule.read(metadata_header.hash())?;
+        let metadata_record = local_capsule
+            .read(metadata_header.hash())?
+            .head()
+            .cloned()
+            .expect("metadata record missing");
         debug!("metadata in client lib create is {:?}", &metadata_record);
 
         // Run the publisher in another task

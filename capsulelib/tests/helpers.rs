@@ -50,7 +50,11 @@ fn db_helpers_store_and_lookup() -> Result<()> {
 
     // read_heartbeat should return the heartbeat we stored
     let hb = capsule.read_heartbeat(header_hash.clone())?;
-    let rec = capsule.read(header_hash.clone())?;
+    let rec = capsule
+        .read(header_hash.clone())?
+        .head()
+        .cloned()
+        .expect("record should include a heartbeat");
     let rec_hb = rec.heartbeat.expect("record should include a heartbeat");
     assert_eq!(serde_json::to_vec(&hb)?, serde_json::to_vec(&rec_hb)?);
 

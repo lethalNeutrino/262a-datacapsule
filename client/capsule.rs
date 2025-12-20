@@ -52,7 +52,12 @@ impl NetworkCapsuleReader {
     pub fn read(&mut self, header_hash: Vec<u8>) -> Result<Record> {
         // If we already have the header locally, return it immediately.
         if self.local_capsule.has_header_hash(header_hash.as_ref())? {
-            return Ok(self.local_capsule.read(header_hash)?);
+            // Capsule::read now returns a RecordContainer; extract the head record.
+            let container = self.local_capsule.read(header_hash)?;
+            return container
+                .head()
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("record not found in container"));
         }
 
         // Prepare the read request.

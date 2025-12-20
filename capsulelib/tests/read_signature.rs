@@ -12,8 +12,8 @@ fn read_rejects_invalid_heartbeat_signature() -> anyhow::Result<()> {
     let header_hash = capsule.append(vec![], b"payload-for-signature-test".to_vec())?;
 
     // read the record and tamper the heartbeat signature in-place in the record
-    let rec = capsule.read(header_hash.clone())?;
-    let mut tampered = rec.clone();
+    let rec_container = capsule.read(header_hash.clone())?;
+    let mut tampered = rec_container.head().cloned().expect("should have record");
 
     if let Some(ref mut hb) = tampered.heartbeat {
         let mut sig_bytes = hb.signature.to_bytes();

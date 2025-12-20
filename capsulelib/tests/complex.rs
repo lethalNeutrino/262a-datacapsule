@@ -31,7 +31,7 @@ fn complex_heavy_appends_and_seqno_checks() -> anyhow::Result<()> {
         // Append and record the header hash returned
         let hh = capsule.append(hash_ptrs.clone(), body.clone())?;
         // Basic immediate checks
-        let rec = capsule.read(hh.clone())?;
+        let rec = capsule.read(hh.clone())?.head().cloned().expect("record");
         assert_eq!(rec.header.seqno, i);
         assert_eq!(rec.header.hash_ptrs.len(), hash_ptrs.len());
 
@@ -44,7 +44,11 @@ fn complex_heavy_appends_and_seqno_checks() -> anyhow::Result<()> {
 
     let mut seen_seqnos = Vec::new();
     loop {
-        let record = capsule.read(current_hash.clone())?;
+        let record = capsule
+            .read(current_hash.clone())?
+            .head()
+            .cloned()
+            .expect("record");
         let hb = capsule.read_heartbeat(current_hash.clone())?;
 
         // Heartbeat embedded in record must match the one stored in heartbeat partition

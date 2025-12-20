@@ -577,7 +577,7 @@ impl Capsule {
         Ok(header_hash)
     }
 
-    pub fn read(&self, header_hash: Vec<u8>) -> Result<Record> {
+    pub fn read(&self, header_hash: Vec<u8>) -> Result<RecordContainer> {
         let record_bytes = self
             .record_partition
             .clone()
@@ -628,7 +628,10 @@ impl Capsule {
             verify_heartbeat_with_metadata(&self.metadata, &hb.data, &hb.signature)?;
         }
 
-        Ok(record)
+        // Wrap the single record into a RecordContainer (last element is head)
+        Ok(RecordContainer {
+            records: vec![record],
+        })
     }
 
     /// Check whether a record with the given header hash exists in this capsule's record partition.
@@ -643,7 +646,11 @@ impl Capsule {
         Ok(items.get(header_hash)?.is_some())
     }
     pub fn peek(&self) -> Result<Record> {
-        self.read(self.last_pointer.1.clone())
+        // Return the head record (last element) from the RecordContainer returned by read
+        let container = self.read(self.last_pointer.1.clone())?;
+        container
+            .into_head()
+            .ok_or_else(|| anyhow::anyhow!("no record available"))
     }
 }
 

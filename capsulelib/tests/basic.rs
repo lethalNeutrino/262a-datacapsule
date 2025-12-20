@@ -16,7 +16,11 @@ fn basic_single_append() -> anyhow::Result<()> {
     let header_hash = capsule.append(vec![], data.clone())?;
 
     // Read record and heartbeat by header_hash
-    let record = capsule.read(header_hash.clone())?;
+    let record = capsule
+        .read(header_hash.clone())?
+        .head()
+        .cloned()
+        .expect("record should be present");
     let hb = capsule.read_heartbeat(header_hash.clone())?;
 
     // Ensure the record contains a heartbeat and matches the stored heartbeat
@@ -47,7 +51,11 @@ fn tampered_heartbeat_signature_is_rejected() -> anyhow::Result<()> {
     // Append one record to get a legitimate header and heartbeat
     let data = b"to be tampered".to_vec();
     let header_hash = capsule.append(vec![], data.clone())?;
-    let record = capsule.read(header_hash.clone())?;
+    let record = capsule
+        .read(header_hash.clone())?
+        .head()
+        .cloned()
+        .expect("should have record");
 
     // Extract header and heartbeat
     let header = record.header.clone();
@@ -84,7 +92,10 @@ fn read_unchecked_allows_tampered_record() -> anyhow::Result<()> {
     let header_hash = capsule.append(vec![], data.clone())?;
 
     // Read the record, tamper its embedded heartbeat signature, and overwrite in store
-    let mut rec = capsule.read(header_hash.clone())?;
+    let mut rec = capsule
+        .read(header_hash.clone())?
+        .into_head()
+        .expect("should have record");
     if let Some(ref mut hb) = rec.heartbeat {
         let mut sig_bytes = hb.signature.to_bytes();
         sig_bytes[0] ^= 0x01;
@@ -107,7 +118,8 @@ fn read_unchecked_allows_tampered_record() -> anyhow::Result<()> {
         res_unchecked.is_ok(),
         "read_unchecked should return record despite tampered signature"
     );
-    let rec_unchecked = res_unchecked.unwrap();
+    // read_unchecked now returns a RecordContainer; extract the head record for assertions.
+    let rec_unchecked = res_unchecked.unwrap().head().cloned().expect("record");
     assert_eq!(rec_unchecked.header.hash(), header_hash);
 
     Ok(())
@@ -123,7 +135,11 @@ fn place_unchecked_allows_inserting_tampered_heartbeat() -> anyhow::Result<()> {
     // Append one record to obtain a header (and header_hash)
     let data = b"payload for place_unchecked".to_vec();
     let header_hash = capsule.append(vec![], data.clone())?;
-    let record = capsule.read(header_hash.clone())?;
+    let record = capsule
+        .read(header_hash.clone())?
+        .head()
+        .cloned()
+        .expect("should have record");
     let header = record.header.clone();
 
     // Prepare a tampered heartbeat (flip signature bytes)
@@ -225,7 +241,11 @@ fn snapshot_roundtrip() -> anyhow::Result<()> {
     assert_eq!(reconstructed.metadata.hash_string(), gdp_name);
 
     // Ensure we can read the record we appended earlier
-    let rec = reconstructed.read(header_hash.clone())?;
+    let rec = reconstructed
+        .read(header_hash.clone())?
+        .head()
+        .cloned()
+        .expect("record should be present");
     assert_eq!(rec.header.hash(), header_hash);
 
     Ok(())
@@ -286,7 +306,11 @@ fn snapshot_updated_on_append() -> anyhow::Result<()> {
     assert_eq!(snap.last_pointer.1, capsule.last_pointer.1);
 
     // Also ensure the appended record is readable
-    let rec = capsule.read(header_hash.clone())?;
+    let rec = capsule
+        .read(header_hash.clone())?
+        .head()
+        .cloned()
+        .expect("record should be present");
     assert_eq!(rec.header.hash(), header_hash);
 
     Ok(())

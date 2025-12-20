@@ -65,7 +65,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         connection.get(capsule_writer.local_capsule.gdp_name(), encryption_key)?;
 
     for hash in header_hashes {
-        println!("retrieved record {:?}", capsule_reader.read(hash)?);
+        // Capsule::read now returns a RecordContainer; extract the head record.
+        let container = capsule_reader.read(hash)?;
+        let r = container.head().cloned().expect("record");
+        println!("retrieved record {:?}", r);
     }
 
     // connection.pool.spawner().spawn_local(async move {
