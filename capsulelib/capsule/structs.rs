@@ -135,6 +135,26 @@ impl Validate for RecordContainer {
     fn valid(&self) -> bool {
         // Basic validation placeholder; keep returning true for now to preserve
         // previous behavior. More thorough checks can be added here if desired.
+        if self.records.is_empty() {
+            return false;
+        }
+        if self.records[0].body.hash_string() != self.records[0].header.data_hash {
+            return false;
+        }
+        for r in self.records.windows(2).rev() {
+            if r[1].body.hash_string() != r[1].header.data_hash {
+                return false;
+            }
+            match r[1].header.prev_ptr.clone() {
+                None => return false,
+                Some(prev) => {
+                    if prev.1 != r[0].header.hash() {
+                        return false;
+                    }
+                }
+            }
+        }
+
         true
     }
 }

@@ -19,6 +19,8 @@ pub type Aes128Ctr64LE = ctr::Ctr64LE<aes::Aes128>;
 
 use anyhow::{Result, bail};
 
+use crate::capsule::structs::RecordContainer;
+
 impl Capsule {
     /// Server-side function to open a container upon getting a create request
     pub fn open<P: AsRef<Path>>(
@@ -362,6 +364,115 @@ impl Capsule {
         hasher.update(to_hash);
         hasher.update(seqno.to_le_bytes());
         hasher.finalize()[..16].try_into().unwrap()
+    }
+
+    pub fn append_to_container(
+        &mut self,
+        mut record_container: RecordContainer,
+        hash_ptrs: Vec<HashPointer>,
+        mut data: Vec<u8>,
+    ) -> Result<RecordContainer> {
+        log::debug!(
+            "Plaintext data: {:?}",
+            data.iter()
+                .map(|c| format!("{:02x}", c))
+                .collect::<String>()
+        );
+        // Encrypt Data
+        let iv: [u8; 16] = Self::derive_record_iv(&self.gdp_name(), self.last_seqno + 1);
+        log::debug!(
+            "Serialized data: {:?}",
+            data.iter()
+                .map(|c| format!("{:02x}", c))
+                .collect::<String>()
+        );
+        let mut cipher = Aes128Ctr64LE::new(self.symmetric_key.as_slice().into(), &iv.into());
+        cipher.apply_keystream(&mut data);
+        debug!("Encryption Key: {:?}", self.symmetric_key);
+        debug!("Encryption IV: {:?}", iv);
+
+        log::debug!(
+            "Encrypted data: {:?}",
+            data.iter()
+                .map(|c| format!("{:02x}", c))
+                .collect::<String>()
+        );
+
+        // Create Header
+        let header = RecordHeader {
+            seqno: self.last_seqno + 1,
+            gdp_name: self.gdp_name(),
+            hash_ptrs,
+            prev_ptr: Some(self.last_pointer.clone()),
+            data_hash: data.clone().hash_string(),
+        };
+
+        let header_hash = header.hash();
+
+        let record = Record {
+            header: header.clone(),
+            heartbeat: None,
+            body: data,
+        };
+
+        // Update internal state
+        self.last_seqno += 1;
+        self.last_pointer = (header.seqno, header.hash());
+
+        record_container.records.push(record);
+        Ok(record_container)
+    }
+
+    pub fn append_container(&mut self, mut record_container: RecordContainer) -> Result<()> {
+        let mut latest = record_container
+            .records
+            .pop()
+            .ok_or(anyhow::Error::msg("empty record container"))?;
+
+        // Create Heartbeat
+        let heartbeat_data = RecordHeartbeatData {
+            seqno: latest.header.seqno,
+            gdp_name: latest.header.gdp_name.clone(),
+            header_hash: latest.header.hash(),
+        };
+
+        // Sign Heartbeat (use helper)
+        let heartbeat_signature = sign_heartbeat_with_key(
+            self.sign_key
+                .as_ref()
+                .expect("append must be called by a writer"),
+            &heartbeat_data,
+        )?;
+
+        let heartbeat = RecordHeartbeat {
+            data: heartbeat_data,
+            signature: heartbeat_signature,
+        };
+        latest.heartbeat = Some(heartbeat);
+        for record in record_container.records.iter() {
+            self.append_record_unchecked(record)?;
+        }
+        self.append_record_unchecked(&latest)?;
+        // record_container.records.push(latest);
+        Ok(())
+    }
+
+    pub fn append_record_unchecked(&mut self, record: &Record) -> Result<()> {
+        let items = self.record_partition.as_ref().unwrap();
+
+        // Store the record under the header hash
+        partition_insert(items, &record.header.hash(), serde_json::to_vec(&record)?)?;
+
+        // Also store the heartbeat in the heartbeat partition at the same key (optional)
+        self.insert_into_heartbeat_partition_opt(
+            &record.header.hash(),
+            serde_json::to_vec(&record.heartbeat)?,
+        )?;
+
+        // Also store seqno -> header_hash mapping (optional)
+        self.insert_into_seqno_partition_opt(record.header.seqno, record.header.hash())?;
+
+        Ok(())
     }
 
     pub fn append(&mut self, hash_ptrs: Vec<HashPointer>, mut data: Vec<u8>) -> Result<Vec<u8>> {
