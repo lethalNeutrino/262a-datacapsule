@@ -5,13 +5,14 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use capsulelib::capsule::structs::{
-    Capsule, Metadata, Record, RecordHeader, RecordHeartbeat, SHA256Hashable,
+    Capsule, Metadata, Record, RecordContainer, RecordHeader, RecordHeartbeat, SHA256Hashable,
 };
 use capsulelib::requests::DataCapsuleRequest;
 use futures::executor::LocalSpawner;
 use futures::{
     Stream, executor::LocalPool, future, stream, stream::StreamExt, task::LocalSpawnExt,
 };
+use indexmap::IndexMap;
 use log::{debug, error, info, warn};
 use r2r::{Context, Node};
 use r2r::{Publisher, QosProfile};
@@ -50,7 +51,9 @@ fn handle_capsule_subscriber(
     let encryption_key = (0..16).collect::<Vec<u8>>();
     match serde_json::from_str::<DataCapsuleRequest>(&request) {
         Ok(DataCapsuleRequest::Append {
-            reply_to, record, ..
+            reply_to,
+            record_container,
+            ..
         }) => {
             info!("[{}] got capsule append request: {}", &gdp_name, request);
             let publisher = local_topics
@@ -60,7 +63,7 @@ fn handle_capsule_subscriber(
                 .publisher
                 .clone();
 
-            handle_append(gdp_name, publisher, record, local_capsules)
+            handle_append(gdp_name, publisher, record_container, local_capsules)
                 .expect("Failed to append capsule");
         }
         Ok(DataCapsuleRequest::Read {
@@ -369,13 +372,17 @@ fn handle_get(
 fn handle_append(
     capsule_name: String,
     reply_to: Publisher<r2r::std_msgs::msg::String>,
-    record: Record,
+    record_container: RecordContainer,
     local_capsules: Rc<RefCell<HashMap<String, Capsule>>>,
 ) -> Result<()> {
     debug!("appending data to capsule!");
 
     // For now use a dummy symmetric key for testing.
     let symmetric_key: Vec<u8> = (0..16).collect::<Vec<u8>>();
+
+    // Assume single-record container: use head and also extract the container map (unused for now).
+    let record = record_container.head.clone();
+    let _container_map = record_container.container;
 
     // Try to reuse a cached capsule if present, otherwise open and cache it.
     {
@@ -436,7 +443,14 @@ fn handle_read(
     // First, try to use a cached capsule (immutable borrow is sufficient for read).
     if let Some(cached) = local_capsules.borrow().get(&capsule_name) {
         let record = cached.read(header_hash.clone())?;
-        let response = DataCapsuleRequest::ReadResponse { record };
+        let mut map: IndexMap<Vec<u8>, Record> = IndexMap::new();
+        map.insert(record.header.hash(), record.clone());
+        let response = DataCapsuleRequest::ReadResponse {
+            record_container: RecordContainer {
+                head: record,
+                container: map,
+            },
+        };
         reply_to.publish(&r2r::std_msgs::msg::String {
             data: serde_json::to_string(&response).unwrap(),
         })?;
@@ -450,7 +464,14 @@ fn handle_read(
         symmetric_key,
     )?;
     let record = local_capsule.read(header_hash)?;
-    let response = DataCapsuleRequest::ReadResponse { record };
+    let mut map: IndexMap<Vec<u8>, Record> = IndexMap::new();
+    map.insert(record.header.hash(), record.clone());
+    let response = DataCapsuleRequest::ReadResponse {
+        record_container: RecordContainer {
+            head: record,
+            container: map,
+        },
+    };
     reply_to.publish(&r2r::std_msgs::msg::String {
         data: serde_json::to_string(&response).unwrap(),
     })?;

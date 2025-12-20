@@ -11,3 +11,4 @@ capsulelib = { package = "datacapsule-capsulelib", path = "../capsulelib" }
 anyhow = "1.0.100"
 log = "0.4.29"
 pretty_env_logger = "0.5.0"
+indexmap = "2.12.1"

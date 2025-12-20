@@ -2,6 +2,7 @@ use ed25519_dalek::Signature;
 use ed25519_dalek::SigningKey;
 use fjall::Keyspace;
 use fjall::PartitionHandle;
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -86,8 +87,10 @@ pub struct RecordHeartbeat {
     pub signature: Signature,
 }
 
-struct RecordContainer {
-    records: Vec<(Option<RecordHeartbeat>, RecordHeader, Vec<u8>)>,
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct RecordContainer {
+    pub head: Record,
+    pub container: IndexMap<Vec<u8>, Record>,
 }
 
 /// Snapshot of the capsule persisted to the keyspace. This struct intentionally

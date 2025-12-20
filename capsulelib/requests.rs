@@ -1,4 +1,4 @@
-use crate::capsule::structs::{Metadata, Record, RecordHeader, RecordHeartbeat};
+use crate::capsule::structs::{Metadata, RecordContainer, RecordHeader, RecordHeartbeat};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -13,7 +13,7 @@ pub enum DataCapsuleRequest {
     Append {
         reply_to: String,
         capsule_name: String,
-        record: Record,
+        record_container: RecordContainer,
     },
     Get {
         reply_to: String,
@@ -36,6 +36,6 @@ pub enum DataCapsuleRequest {
         header: RecordHeader,
     },
     ReadResponse {
-        record: Record,
+        record_container: RecordContainer,
     },
 }

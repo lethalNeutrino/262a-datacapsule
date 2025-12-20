@@ -335,10 +335,10 @@ impl<'a> Connection<'a> {
                         Err(e) => {
                             warn!("It's bwoken: {}", e);
                         }
-                    };
+                    }
                     future::ready(())
                 })
-                .await
+                .await;
         })?;
 
         // Prepare serialized payload for the Get request so we can resend cheaply.

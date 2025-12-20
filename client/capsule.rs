@@ -1,8 +1,11 @@
 use crate::Topic;
 use anyhow::Result;
-use capsulelib::capsule::structs::{Capsule, HashPointer, Record, RecordHeartbeat};
+use capsulelib::capsule::structs::{
+    Capsule, HashPointer, Record, RecordContainer, RecordHeartbeat, SHA256Hashable,
+};
 use capsulelib::requests::DataCapsuleRequest;
 use futures::{StreamExt, executor::LocalPool, task::LocalSpawnExt};
+use indexmap::IndexMap;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
@@ -18,10 +21,20 @@ impl NetworkCapsuleWriter {
         let header_hash = self.local_capsule.append(hash_ptrs, data)?;
         let record = self.local_capsule.peek()?;
         let capsule_name = self.local_capsule.gdp_name();
+
+        // Build a RecordContainer: place the single record as head and also
+        // insert it into the container map keyed by its header hash.
+        let mut map: IndexMap<Vec<u8>, Record> = IndexMap::new();
+        map.insert(record.header.hash(), record.clone());
+        let record_container = RecordContainer {
+            head: record.clone(),
+            container: map,
+        };
+
         let request = DataCapsuleRequest::Append {
             reply_to: self.uuid.clone(),
             capsule_name,
-            record,
+            record_container,
         };
 
         self.topic.publisher.publish(&r2r::std_msgs::msg::String {
@@ -73,8 +86,11 @@ impl NetworkCapsuleReader {
         //     real_sub
         //         .for_each(move |msg| {
         //             match serde_json::from_str::<DataCapsuleRequest>(&msg.data) {
-        //                 Ok(DataCapsuleRequest::ReadResponse { record }) => {
-        //                     *holder_for_task.borrow_mut() = Some(record);
+        //                 Ok(DataCapsuleRequest::ReadResponse { records }) => {
+        //                     // For now take the first record from the container (future: handle multiple)
+        //                     if let Some(rec) = records.into_iter().next() {
+        //                         *holder_for_task.borrow_mut() = Some(rec);
+        //                     }
         //                 }
         //                 Ok(_) => {
         //                     // ignore other messages
