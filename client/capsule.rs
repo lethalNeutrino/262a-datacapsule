@@ -5,7 +5,7 @@ use capsulelib::capsule::structs::{
 };
 use capsulelib::requests::DataCapsuleRequest;
 use futures::{StreamExt, executor::LocalPool, task::LocalSpawnExt};
-use indexmap::IndexMap;
+
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
@@ -22,13 +22,9 @@ impl NetworkCapsuleWriter {
         let record = self.local_capsule.peek()?;
         let capsule_name = self.local_capsule.gdp_name();
 
-        // Build a RecordContainer: place the single record as head and also
-        // insert it into the container map keyed by its header hash.
-        let mut map: IndexMap<Vec<u8>, Record> = IndexMap::new();
-        map.insert(record.header.hash(), record.clone());
+        // Build a RecordContainer: place the single record as the head (last element).
         let record_container = RecordContainer {
-            head: record.clone(),
-            container: map,
+            records: vec![record.clone()],
         };
 
         let request = DataCapsuleRequest::Append {

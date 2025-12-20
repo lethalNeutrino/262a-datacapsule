@@ -382,8 +382,9 @@ fn handle_append(
     let symmetric_key: Vec<u8> = (0..16).collect::<Vec<u8>>();
 
     // Assume single-record container: use head and also extract the container map (unused for now).
-    let record = record_container.head.clone();
-    let _container_map = record_container.container;
+    // New RecordContainer stores `records: Vec<Record>`; take the last entry as the head.
+    let record = record_container.head().cloned().unwrap_or_default();
+    let _container_map = record_container.to_index_map();
 
     // Try to reuse a cached capsule if present, otherwise open and cache it.
     {
@@ -444,12 +445,9 @@ fn handle_read(
     // First, try to use a cached capsule (immutable borrow is sufficient for read).
     if let Some(cached) = local_capsules.borrow().get(&capsule_name) {
         let record = cached.read(header_hash.clone())?;
-        let mut map: IndexMap<Vec<u8>, Record> = IndexMap::new();
-        map.insert(record.header.hash(), record.clone());
         let response = DataCapsuleRequest::ReadResponse {
             record_container: RecordContainer {
-                head: record,
-                container: map,
+                records: vec![record],
             },
         };
         reply_to.publish(&r2r::std_msgs::msg::String {
@@ -465,12 +463,9 @@ fn handle_read(
         symmetric_key,
     )?;
     let record = local_capsule.read(header_hash)?;
-    let mut map: IndexMap<Vec<u8>, Record> = IndexMap::new();
-    map.insert(record.header.hash(), record.clone());
     let response = DataCapsuleRequest::ReadResponse {
         record_container: RecordContainer {
-            head: record,
-            container: map,
+            records: vec![record],
         },
     };
     reply_to.publish(&r2r::std_msgs::msg::String {

@@ -104,12 +104,37 @@ pub struct RecordHeartbeat {
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct RecordContainer {
-    pub head: Record,
-    pub container: IndexMap<Vec<u8>, Record>,
+    /// Ordered collection of records. The last element, if any, is considered
+    /// the "head" (i.e. the most recent record).
+    pub records: Vec<Record>,
+}
+
+impl RecordContainer {
+    /// Return a reference to the head (last record) if present.
+    pub fn head(&self) -> Option<&Record> {
+        self.records.last()
+    }
+
+    /// Consume the container and return the head (last record) if present.
+    pub fn into_head(self) -> Option<Record> {
+        self.records.into_iter().last()
+    }
+
+    /// Build an index map of header-hash -> Record for all records in the container.
+    /// This preserves the previous ability to obtain a map keyed by header hash.
+    pub fn to_index_map(&self) -> IndexMap<Vec<u8>, Record> {
+        let mut map: IndexMap<Vec<u8>, Record> = IndexMap::new();
+        for rec in &self.records {
+            map.insert(rec.header.hash(), rec.clone());
+        }
+        map
+    }
 }
 
 impl Validate for RecordContainer {
     fn valid(&self) -> bool {
+        // Basic validation placeholder; keep returning true for now to preserve
+        // previous behavior. More thorough checks can be added here if desired.
         true
     }
 }
