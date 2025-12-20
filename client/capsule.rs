@@ -112,21 +112,13 @@ impl NetworkCapsuleReader {
                 data: serde_json::to_string(&request)?,
             })?;
 
-        // Run the local pool AND spin the r2r node until we get a record.
-        // while record_holder.borrow().is_none() {
-        //     // Spin the shared node so ROS messages are delivered to the subscriber.
-        //     println!("here");
-        //     self.node
-        //         .borrow_mut()
-        //         .spin_once(std::time::Duration::from_millis(100));
-        //     pool.run_until_stalled();
-        // }
-
-        // // Extract the record and return it.
-        // let rec = record_holder.borrow_mut().take().unwrap();
-        // println!("got record {:?}", rec);
-
-        Ok(Record::default())
+        // The networked/read-via-ROS path is not implemented in this client helper.
+        // Previously this returned a placeholder `Record::default()` which can silently
+        // hide logic errors. Return an explicit error so callers know this path is
+        // unimplemented and can handle it (or rely on local cache).
+        Err(anyhow::anyhow!(
+            "networked capsule read is not implemented in NetworkCapsuleReader"
+        ))
     }
 
     pub fn latest_heartbeat() -> Result<RecordHeartbeat> {

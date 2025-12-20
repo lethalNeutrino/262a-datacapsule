@@ -16,9 +16,10 @@ fn basic_single_append() -> anyhow::Result<()> {
     let header_hash = capsule.append(vec![], data.clone())?;
 
     // Read record and heartbeat by header_hash
-    let record = capsule
-        .read(header_hash.clone())?
-        .head()
+    let container = capsule.read(header_hash.clone())?;
+    let record = container
+        .records
+        .first()
         .cloned()
         .expect("record should be present");
     let hb = capsule.read_heartbeat(header_hash.clone())?;
@@ -51,9 +52,10 @@ fn tampered_heartbeat_signature_is_rejected() -> anyhow::Result<()> {
     // Append one record to get a legitimate header and heartbeat
     let data = b"to be tampered".to_vec();
     let header_hash = capsule.append(vec![], data.clone())?;
-    let record = capsule
-        .read(header_hash.clone())?
-        .head()
+    let container = capsule.read(header_hash.clone())?;
+    let record = container
+        .records
+        .first()
         .cloned()
         .expect("should have record");
 
@@ -119,7 +121,12 @@ fn read_unchecked_allows_tampered_record() -> anyhow::Result<()> {
         "read_unchecked should return record despite tampered signature"
     );
     // read_unchecked now returns a RecordContainer; extract the head record for assertions.
-    let rec_unchecked = res_unchecked.unwrap().head().cloned().expect("record");
+    let rec_unchecked = res_unchecked
+        .unwrap()
+        .records
+        .first()
+        .cloned()
+        .expect("record");
     assert_eq!(rec_unchecked.header.hash(), header_hash);
 
     Ok(())
@@ -135,8 +142,8 @@ fn place_unchecked_allows_inserting_tampered_heartbeat() -> anyhow::Result<()> {
     // Append one record to obtain a header (and header_hash)
     let data = b"payload for place_unchecked".to_vec();
     let header_hash = capsule.append(vec![], data.clone())?;
-    let record = capsule
-        .read(header_hash.clone())?
+    let record_container = capsule.read(header_hash.clone())?;
+    let record = record_container
         .head()
         .cloned()
         .expect("should have record");
@@ -241,8 +248,8 @@ fn snapshot_roundtrip() -> anyhow::Result<()> {
     assert_eq!(reconstructed.metadata.hash_string(), gdp_name);
 
     // Ensure we can read the record we appended earlier
-    let rec = reconstructed
-        .read(header_hash.clone())?
+    let rec_container = reconstructed.read(header_hash.clone())?;
+    let rec = rec_container
         .head()
         .cloned()
         .expect("record should be present");
@@ -306,8 +313,8 @@ fn snapshot_updated_on_append() -> anyhow::Result<()> {
     assert_eq!(snap.last_pointer.1, capsule.last_pointer.1);
 
     // Also ensure the appended record is readable
-    let rec = capsule
-        .read(header_hash.clone())?
+    let rec_container = capsule.read(header_hash.clone())?;
+    let rec = rec_container
         .head()
         .cloned()
         .expect("record should be present");

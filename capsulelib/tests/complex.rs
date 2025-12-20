@@ -31,7 +31,14 @@ fn complex_heavy_appends_and_seqno_checks() -> anyhow::Result<()> {
         // Append and record the header hash returned
         let hh = capsule.append(hash_ptrs.clone(), body.clone())?;
         // Basic immediate checks
-        let rec = capsule.read(hh.clone())?.head().cloned().expect("record");
+        let rec_container = capsule.read(hh.clone())?;
+        let rec = rec_container.records.first().cloned().expect("record");
+        println!(
+            "[TEST DEBUG] i={} returned_seqno={} hash_ptrs_len={}",
+            i,
+            rec.header.seqno,
+            rec.header.hash_ptrs.len()
+        );
         assert_eq!(rec.header.seqno, i);
         assert_eq!(rec.header.hash_ptrs.len(), hash_ptrs.len());
 
@@ -44,11 +51,8 @@ fn complex_heavy_appends_and_seqno_checks() -> anyhow::Result<()> {
 
     let mut seen_seqnos = Vec::new();
     loop {
-        let record = capsule
-            .read(current_hash.clone())?
-            .head()
-            .cloned()
-            .expect("record");
+        let rec_container = capsule.read(current_hash.clone())?;
+        let record = rec_container.records.first().cloned().expect("record");
         let hb = capsule.read_heartbeat(current_hash.clone())?;
 
         // Heartbeat embedded in record must match the one stored in heartbeat partition
@@ -58,6 +62,33 @@ fn complex_heavy_appends_and_seqno_checks() -> anyhow::Result<()> {
         // Seqno -> header-hash mapping must point to this header hash
         let seq = record.header.seqno;
         let mapped = capsule.get_header_hash_for_seqno(seq)?;
+        // Debug output to help trace mismatches: print compact hex strings for human readability.
+        let mapped_hex = mapped
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>();
+        let current_hex = current_hash
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>();
+        let record_hex = record
+            .header
+            .hash()
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>();
+        let expected_hex = if seq >= 1 && (seq - 1) < header_hashes.len() {
+            header_hashes[(seq - 1)]
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>()
+        } else {
+            "<none>".to_string()
+        };
+        println!(
+            "[TEST DEBUG] seq={} mapped={} current={} record_header={} expected_for_seq={}",
+            seq, mapped_hex, current_hex, record_hex, expected_hex
+        );
         assert_eq!(mapped, current_hash);
 
         seen_seqnos.push(seq);

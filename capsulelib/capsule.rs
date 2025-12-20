@@ -407,7 +407,7 @@ impl Capsule {
             data_hash: data.clone().hash_string(),
         };
 
-        let header_hash = header.hash();
+        // header_hash intentionally omitted (was unused)
 
         let record = Record {
             header: header.clone(),
@@ -485,6 +485,15 @@ impl Capsule {
         )?;
 
         // Also store seqno -> header_hash mapping (optional)
+        // Log the seqno->header mapping that will be inserted to help debugging/tracing.
+        log::debug!(
+            "inserting seqno->header mapping: seqno={}, header_hash={}",
+            rec.header.seqno,
+            header_hash
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>()
+        );
         self.insert_into_seqno_partition_opt(rec.header.seqno, header_hash.clone())?;
 
         // Update internal last_seqno/last_pointer if this record is newer
@@ -599,60 +608,146 @@ impl Capsule {
     }
 
     pub fn read(&self, header_hash: Vec<u8>) -> Result<RecordContainer> {
-        let record_bytes = self
+        // This read follows the chain from the capsule's latest heartbeat record (self.last_pointer)
+        // following `prev_ptr` backwards until it reaches the requested `header_hash`.
+        // It returns the path of records checked as a RecordContainer whose first element
+        // is the desired node (header_hash) and whose last element is the record that had a heartbeat.
+        let items = self
             .record_partition
-            .clone()
-            .unwrap()
-            .get(&header_hash)
-            .unwrap()
-            .unwrap_or_else(|| {
-                panic!(
-                    "Unable to find corresponding record for hash {:?}",
-                    header_hash
-                )
-            })
-            .to_vec();
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("record partition not opened"))?;
 
-        let mut record: Record = serde_json::from_slice(&record_bytes)?;
+        // Target we want to reach in the chain
+        let target_hash = header_hash;
+        // Start at the capsule's latest known pointer (which should contain a heartbeat)
+        let mut current_hash = self.last_pointer.1.clone();
 
-        log::debug!(
-            "retrieved record data (encrypted): {}",
-            record
-                .body
-                .iter()
-                .map(|b| format!("{:02x}", b))
-                .collect::<String>()
-        );
+        let mut path: Vec<Record> = Vec::new();
 
-        let iv: [u8; 16] =
-            Self::derive_record_iv(record.header.gdp_name.as_str(), record.header.seqno);
+        loop {
+            // Fetch the record bytes for the current hash
+            let record_bytes = items
+                .get(&current_hash)?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Unable to find corresponding record for hash {:?}",
+                        current_hash
+                    )
+                })?
+                .to_vec();
 
-        debug!("Decryption Key: {:?}", self.symmetric_key);
-        debug!("Decryption IV: {:?}", iv);
+            let mut record: Record = serde_json::from_slice(&record_bytes)?;
 
-        let mut cipher = Aes128Ctr64LE::new(self.symmetric_key.as_slice().into(), &iv.into());
-        cipher.apply_keystream(&mut record.body);
+            // Debug: log header basic info right after deserialization so we can trace traversal.
+            log::debug!(
+                "traversal: deserialized record seqno={}, gdp_name={}, header_hash={:?}",
+                record.header.seqno,
+                record.header.gdp_name,
+                record.header.hash()
+            );
 
-        log::info!("retrieved {:?}", record);
-        log::info!(
-            "retrieved record data (decrypted) {:?}",
-            record
-                .body
-                .iter()
-                .map(|b| format!("{:02x}", b))
-                .collect::<String>()
-        );
+            log::debug!(
+                "retrieved record data (encrypted): {}",
+                record
+                    .body
+                    .iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect::<String>()
+            );
 
-        // Verify heartbeat signature (if present) using the capsule's stored verify_key.
-        if let Some(hb) = &record.heartbeat {
-            // Verify heartbeat signature using helper (reads verify_key from metadata)
-            verify_heartbeat_with_metadata(&self.metadata, &hb.data, &hb.signature)?;
+            // Decrypt the record body using derived IV from its header
+            let iv: [u8; 16] =
+                Self::derive_record_iv(record.header.gdp_name.as_str(), record.header.seqno);
+
+            debug!("Decryption Key: {:?}", self.symmetric_key);
+            debug!("Decryption IV: {:?}", iv);
+
+            let mut cipher = Aes128Ctr64LE::new(self.symmetric_key.as_slice().into(), &iv.into());
+            cipher.apply_keystream(&mut record.body);
+
+            // Debug: log after decryption (truncated body hex for readability)
+            log::info!(
+                "retrieved record seqno={} decrypted ({} bytes)",
+                record.header.seqno,
+                record.body.len()
+            );
+            log::info!(
+                "retrieved record data (decrypted) (prefix) {:?}",
+                record
+                    .body
+                    .iter()
+                    .take(64)
+                    .map(|b| format!("{:02x}", b))
+                    .collect::<String>()
+            );
+
+            // Verify heartbeat signature if present for this record, but also log heartbeat details for tracing.
+            if let Some(hb) = &record.heartbeat {
+                log::debug!(
+                    "record has heartbeat: hb.seqno={}, hb.header_hash={:?}",
+                    hb.data.seqno,
+                    hb.data.header_hash
+                );
+                verify_heartbeat_with_metadata(&self.metadata, &hb.data, &hb.signature)?;
+            } else {
+                log::debug!("record has no heartbeat: seqno={}", record.header.seqno);
+            }
+
+            // Push the (decrypted & verified) record into the path.
+            // We traverse from latest -> earlier, so we'll reverse before returning.
+            let prev_ptr_opt = record.header.prev_ptr.clone();
+            // Capture this record's seqno; may be used if prev_ptr is absent.
+            let current_seqno = record.header.seqno;
+            path.push(record);
+
+            // If we've reached the requested header hash, stop traversing.
+            if current_hash == target_hash {
+                break;
+            }
+
+            // Otherwise, move to the previous pointer in the chain.
+            match prev_ptr_opt {
+                Some(prev) => {
+                    current_hash = prev.1;
+                }
+                None => {
+                    // If prev_ptr is missing, attempt to fall back to the seqno -> header mapping
+                    // stored in the capsule's seqno partition. This allows reading chains where
+                    // prev_ptr was not set on stored records but a persistent seqno mapping exists.
+                    if current_seqno == 0 {
+                        return Err(anyhow::anyhow!(
+                            "target header hash not found in capsule chain (reached seqno 0)"
+                        ));
+                    }
+                    let prev_seqno = current_seqno - 1;
+                    match self.get_header_hash_for_seqno(prev_seqno) {
+                        Ok(prev_hash) => {
+                            current_hash = prev_hash;
+                        }
+                        Err(_) => {
+                            // No seqno mapping available; fail as before.
+                            return Err(anyhow::anyhow!(
+                                "target header hash not found in capsule chain"
+                            ));
+                        }
+                    }
+                }
+            }
         }
 
-        // Wrap the single record into a RecordContainer (last element is head)
-        Ok(RecordContainer {
-            records: vec![record],
-        })
+        // Currently `path` contains records from latest -> target.
+        // Reverse so the returned container starts with the desired node and
+        // ends with the record that had the heartbeat (latest).
+        path.reverse();
+
+        // Ensure the returned container ends with a record that has a heartbeat.
+        if path.last().and_then(|r| r.heartbeat.as_ref()).is_none() {
+            return Err(anyhow::anyhow!(
+                "returned path does not end with a heartbeat"
+            ));
+        }
+
+        Ok(RecordContainer { records: path })
     }
 
     /// Check whether a record with the given header hash exists in this capsule's record partition.

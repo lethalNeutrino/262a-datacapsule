@@ -58,8 +58,8 @@ proptest! {
         // 2) For each returned header hash, read back the record and verify the decrypted body
         // exactly matches the original payload at the same position.
         for (i, hh) in returned_hashes.iter().enumerate() {
-            let rc = capsule.read(hh.clone()).unwrap();
-            let rec = rc.head().cloned().expect("record present");
+            let rc = capsule.read(hh.clone()).expect("read should succeed");
+            let rec = rc.records.first().cloned().expect("record present");
 
             // Compare decrypted body to the original randomized payload we constructed earlier.
             prop_assert_eq!(rec.body.as_slice(), payloads[i].as_slice(), "payload mismatch at index {}", i);
@@ -68,8 +68,8 @@ proptest! {
         // 3) Verify the last record has a heartbeat and that the heartbeat stored in
         //    the heartbeat partition matches the embedded heartbeat.
         let last_hh = returned_hashes.last().cloned().unwrap();
-        let rc_last = capsule.read(last_hh.clone()).unwrap();
-        let rec_last = rc_last.head().cloned().expect("last record present");
+        let rc_last = capsule.read(last_hh.clone()).expect("read should succeed");
+        let rec_last = rc_last.records.first().cloned().expect("last record present");
         prop_assert!(rec_last.heartbeat.is_some(), "latest record should have heartbeat");
 
         let hb_in_partition: RecordHeartbeat = capsule.read_heartbeat(last_hh.clone()).unwrap();

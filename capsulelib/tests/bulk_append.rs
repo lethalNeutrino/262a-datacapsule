@@ -53,8 +53,12 @@ fn bulk_append_order_and_contents() -> anyhow::Result<()> {
         // Verify order and contents: read back each returned header-hash in order and
         // compare decrypted payloads to the original payloads.
         for (i, hh) in header_hashes.iter().enumerate() {
-            let rc = capsule.read(hh.clone())?;
-            let rec = rc.head().cloned().expect("record should be present");
+            let rec_container = capsule.read(hh.clone())?;
+            let rec = rec_container
+                .records
+                .first()
+                .cloned()
+                .expect("record should be present");
             // Header hash should match the returned hh
             assert_eq!(
                 &rec.header.hash(),
@@ -112,8 +116,12 @@ fn bulk_append_latest_contains_heartbeat() -> anyhow::Result<()> {
         .expect("expected at least one header hash");
 
     // Read the stored record and assert it contains a heartbeat
-    let rc = capsule.read(last_hh.clone())?;
-    let rec = rc.head().cloned().expect("record should be present");
+    let rec_container = capsule.read(last_hh.clone())?;
+    let rec = rec_container
+        .records
+        .first()
+        .cloned()
+        .expect("record should be present");
     assert!(
         rec.heartbeat.is_some(),
         "latest record should have a heartbeat"

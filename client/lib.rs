@@ -163,8 +163,8 @@ impl<'a> Connection<'a> {
             data_hash: gdp_name.clone(),
         };
 
-        let metadata_record = local_capsule
-            .read(metadata_header.hash())?
+        let metadata_container = local_capsule.read(metadata_header.hash())?;
+        let metadata_record = metadata_container
             .head()
             .cloned()
             .expect("metadata record missing");
