@@ -466,18 +466,32 @@ impl Capsule {
     pub fn append_record_unchecked(&mut self, record: &Record) -> Result<Vec<u8>> {
         let items = self.record_partition.as_ref().unwrap();
 
-        // Compute header hash and store the record under that key
-        let header_hash = record.header.hash();
-        partition_insert(items, &header_hash, serde_json::to_vec(&record)?)?;
+        // Clone the record so we can encrypt the body before storing
+        let mut rec = record.clone();
+
+        // Encrypt the record body using capsule symmetric key and IV derived from header
+        let iv: [u8; 16] = Self::derive_record_iv(rec.header.gdp_name.as_str(), rec.header.seqno);
+        let mut cipher = Aes128Ctr64LE::new(self.symmetric_key.as_slice().into(), &iv.into());
+        cipher.apply_keystream(&mut rec.body);
+
+        // Compute header hash and store the encrypted record under that key
+        let header_hash = rec.header.hash();
+        partition_insert(items, &header_hash, serde_json::to_vec(&rec)?)?;
 
         // Also store the heartbeat in the heartbeat partition at the same key (optional)
         self.insert_into_heartbeat_partition_opt(
             &header_hash,
-            serde_json::to_vec(&record.heartbeat)?,
+            serde_json::to_vec(&rec.heartbeat)?,
         )?;
 
         // Also store seqno -> header_hash mapping (optional)
-        self.insert_into_seqno_partition_opt(record.header.seqno, header_hash.clone())?;
+        self.insert_into_seqno_partition_opt(rec.header.seqno, header_hash.clone())?;
+
+        // Update internal last_seqno/last_pointer if this record is newer
+        if rec.header.seqno > self.last_seqno {
+            self.last_seqno = rec.header.seqno;
+            self.last_pointer = (rec.header.seqno, header_hash.clone());
+        }
 
         Ok(header_hash)
     }
