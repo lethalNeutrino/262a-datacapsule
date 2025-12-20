@@ -1,4 +1,3 @@
-/root/262a-datacapsule/examples/bench/src/bench_batches.rs
 use std::collections::BTreeMap;
 use std::env;
 
@@ -7,7 +6,7 @@ use capsulelib::capsule::structs::{
     Metadata, Record, RecordContainer, RecordHeader, SHA256Hashable,
 };
 use ed25519_dalek::SigningKey;
-use futures::{executor::LocalPool};
+use futures::executor::LocalPool;
 use log::{debug, info};
 
 fn build_payload(i: usize) -> Vec<u8> {
@@ -71,7 +70,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create batches and write them using the capsule's RecordContainer API.
     while next_seq_index < total {
-        let mut container = RecordContainer { records: Vec::new() };
+        let mut container = RecordContainer {
+            records: Vec::new(),
+        };
 
         // Build a batch sized slice for this iteration
         let end = std::cmp::min(next_seq_index + batch_size, total);
