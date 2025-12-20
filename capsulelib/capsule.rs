@@ -620,6 +620,8 @@ impl Capsule {
 
         // Target we want to reach in the chain
         let target_hash = header_hash;
+        debug!("looking for target hash {:?}", target_hash);
+        debug!("starting at seqno {:?}", self.last_pointer.0);
         // Start at the capsule's latest known pointer (which should contain a heartbeat)
         let mut current_hash = self.last_pointer.1.clone();
 
