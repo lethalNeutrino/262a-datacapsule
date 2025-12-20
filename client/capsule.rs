@@ -39,6 +39,31 @@ impl NetworkCapsuleWriter {
 
         Ok(header_hash)
     }
+
+    /// Persist a batch of records locally (signing the last heartbeat) and publish
+    /// the same RecordContainer to the network so servers can persist the records too.
+    /// Returns the header hashes produced by the local append_container call.
+    pub fn append_container_network(
+        &mut self,
+        mut container: RecordContainer,
+    ) -> Result<Vec<Vec<u8>>> {
+        // Persist locally first, which will sign the heartbeat of the last record
+        // and store all records in the capsule partition.
+        let returned_hashes = self.local_capsule.append_container(container.clone())?;
+
+        // Publish the same container to the network so servers can persist it.
+        let request = DataCapsuleRequest::Append {
+            reply_to: self.uuid.clone(),
+            capsule_name: self.local_capsule.gdp_name(),
+            record_container: container,
+        };
+
+        self.topic.publisher.publish(&r2r::std_msgs::msg::String {
+            data: serde_json::to_string(&request)?,
+        })?;
+
+        Ok(returned_hashes)
+    }
 }
 
 pub struct NetworkCapsuleReader {
@@ -117,13 +142,27 @@ impl NetworkCapsuleReader {
                 data: serde_json::to_string(&request)?,
             })?;
 
-        // The networked/read-via-ROS path is not implemented in this client helper.
-        // Previously this returned a placeholder `Record::default()` which can silently
-        // hide logic errors. Return an explicit error so callers know this path is
-        // unimplemented and can handle it (or rely on local cache).
-        Err(anyhow::anyhow!(
-            "networked capsule read is not implemented in NetworkCapsuleReader"
-        ))
+        // Wait for a ReadResponse from the network listener spawned above.
+        // We'll wait up to a timeout while spinning the shared node handle and
+        // running the local task pool so the spawned listener can process messages.
+        use std::time::{Duration, Instant};
+        let timeout = Duration::from_secs(5);
+        let start = Instant::now();
+        while record_holder.borrow().is_none() && start.elapsed() < timeout {
+            // spin node and run pool briefly
+            {
+                let mut nb = self.node.borrow_mut();
+                nb.spin_once(Duration::from_millis(50));
+            }
+            pool.run_until_stalled();
+        }
+
+        // If a record was received, return it.
+        if let Some(rec) = record_holder.borrow_mut().take() {
+            return Ok(rec);
+        }
+
+        Err(anyhow::anyhow!("no ReadResponse received within timeout"))
     }
 
     pub fn latest_heartbeat() -> Result<RecordHeartbeat> {
