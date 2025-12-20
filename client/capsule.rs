@@ -52,10 +52,13 @@ impl NetworkCapsuleReader {
     pub fn read(&mut self, header_hash: Vec<u8>) -> Result<Record> {
         // If we already have the header locally, return it immediately.
         if self.local_capsule.has_header_hash(header_hash.as_ref())? {
-            // Capsule::read now returns a RecordContainer; extract the head record.
+            // Capsule::read returns a RecordContainer where the first element is
+            // the requested node. Extract that first element rather than the
+            // container \"head\" (which represents the latest/heartbeat record).
             let container = self.local_capsule.read(header_hash)?;
             return container
-                .head()
+                .records
+                .first()
                 .cloned()
                 .ok_or_else(|| anyhow::anyhow!("record not found in container"));
         }

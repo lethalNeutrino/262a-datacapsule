@@ -65,10 +65,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         connection.get(capsule_writer.local_capsule.gdp_name(), encryption_key)?;
 
     for hash in header_hashes {
-        // Capsule::read now returns a RecordContainer; extract the head record.
-        let container = capsule_reader.read(hash)?;
-        let r = container.head().cloned().expect("record");
-        println!("retrieved record {:?}", r);
+        // `NetworkCapsuleReader::read` returns a `Record` (not a RecordContainer)
+        // for the network client helper. Handle the Result<Record> directly.
+        match capsule_reader.read(hash) {
+            Ok(r) => println!("retrieved record {:?}", r),
+            Err(e) => eprintln!("failed to retrieve record: {}", e),
+        }
     }
 
     // connection.pool.spawner().spawn_local(async move {
