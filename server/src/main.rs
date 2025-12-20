@@ -1,5 +1,4 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
@@ -16,6 +15,7 @@ use indexmap::IndexMap;
 use log::{debug, error, info, warn};
 use r2r::{Context, Node};
 use r2r::{Publisher, QosProfile};
+use std::collections::{HashMap, HashSet};
 
 /// TODO: REFACTOR THIS INTO NETWORK LIB
 pub struct Connection {
