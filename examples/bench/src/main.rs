@@ -66,11 +66,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut records: Vec<Record> = Vec::new();
     for hash in header_hashes {
-        // Capsule::read now returns a RecordContainer; extract the head record.
-        let container = capsule_reader.read(hash)?;
-        let r = container.head().cloned().expect("record");
-        debug!("retrieved record {:?}", r);
-        records.push(r);
+        // `NetworkCapsuleReader::read` returns a `Record` (for local-cache reads).
+        match capsule_reader.read(hash) {
+            Ok(r) => {
+                debug!("retrieved record {:?}", r);
+                records.push(r);
+            }
+            Err(e) => {
+                eprintln!("failed to retrieve record: {}", e);
+            }
+        }
     }
 
     for r in records.iter() {
