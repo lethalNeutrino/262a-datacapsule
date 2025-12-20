@@ -625,6 +625,7 @@ impl Capsule {
         let mut path: Vec<Record> = Vec::new();
 
         loop {
+            debug!("fetching record for hash {:?}", current_hash);
             // Fetch the record bytes for the current hash
             let record_bytes = items
                 .get(&current_hash)?
