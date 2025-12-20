@@ -135,6 +135,7 @@ impl Capsule {
             gdp_name: gdp_name.to_string(),
             prev_ptr: None,
             hash_ptrs: Vec::new(),
+            data_hash: metadata.hash_string(),
         };
 
         let metadata_header_hash = metadata_header.hash();
@@ -320,6 +321,7 @@ impl Capsule {
             gdp_name: gdp_name.clone(),
             prev_ptr: None,
             hash_ptrs: Vec::new(),
+            data_hash: gdp_name.clone(),
         };
         let metadata_header_hash = metadata_header.hash();
         debug!("looking for metadata at {:?}", &metadata_header_hash);
@@ -363,12 +365,33 @@ impl Capsule {
     }
 
     pub fn append(&mut self, hash_ptrs: Vec<HashPointer>, mut data: Vec<u8>) -> Result<Vec<u8>> {
+        // Encrypt Data
+        let iv: [u8; 16] = Self::derive_record_iv(&self.gdp_name(), self.last_seqno + 1);
+        log::debug!(
+            "Serialized data: {:?}",
+            data.iter()
+                .map(|c| format!("{:02x}", c))
+                .collect::<String>()
+        );
+        let mut cipher = Aes128Ctr64LE::new(self.symmetric_key.as_slice().into(), &iv.into());
+        cipher.apply_keystream(&mut data);
+        debug!("Encryption Key: {:?}", self.symmetric_key);
+        debug!("Encryption IV: {:?}", iv);
+
+        log::debug!(
+            "Encrypted data: {:?}",
+            data.iter()
+                .map(|c| format!("{:02x}", c))
+                .collect::<String>()
+        );
+
         // Create Header
         let header = RecordHeader {
             seqno: self.last_seqno + 1,
             gdp_name: self.gdp_name(),
             hash_ptrs,
             prev_ptr: Some(self.last_pointer.clone()),
+            data_hash: data.clone().hash_string(),
         };
 
         let header_hash = header.hash();
@@ -395,26 +418,6 @@ impl Capsule {
 
         log::debug!(
             "Plaintext data: {:?}",
-            data.iter()
-                .map(|c| format!("{:02x}", c))
-                .collect::<String>()
-        );
-
-        // Encrypt Data
-        let iv: [u8; 16] = Self::derive_record_iv(&self.gdp_name(), self.last_seqno + 1);
-        log::debug!(
-            "Serialized data: {:?}",
-            data.iter()
-                .map(|c| format!("{:02x}", c))
-                .collect::<String>()
-        );
-        let mut cipher = Aes128Ctr64LE::new(self.symmetric_key.as_slice().into(), &iv.into());
-        cipher.apply_keystream(&mut data);
-        debug!("Encryption Key: {:?}", self.symmetric_key);
-        debug!("Encryption IV: {:?}", iv);
-
-        log::debug!(
-            "Encrypted data: {:?}",
             data.iter()
                 .map(|c| format!("{:02x}", c))
                 .collect::<String>()

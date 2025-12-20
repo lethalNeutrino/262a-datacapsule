@@ -352,6 +352,7 @@ fn handle_get(
         gdp_name: capsule_name.clone().to_string(),
         prev_ptr: None,
         hash_ptrs: Vec::new(),
+        data_hash: capsule_name.clone(),
     };
 
     let metadata_header_hash = metadata_header.hash();

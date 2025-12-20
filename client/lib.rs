@@ -160,6 +160,7 @@ impl<'a> Connection<'a> {
             gdp_name: gdp_name.to_string(),
             prev_ptr: None,
             hash_ptrs: Vec::new(),
+            data_hash: gdp_name.clone(),
         };
 
         let metadata_record = local_capsule.read(metadata_header.hash())?;

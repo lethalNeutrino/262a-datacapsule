@@ -25,6 +25,10 @@ pub trait SHA256Hashable {
     }
 }
 
+pub trait Validate {
+    fn valid(&self) -> bool;
+}
+
 impl SHA256Hashable for Metadata {
     fn hash(&self) -> Vec<u8> {
         // compute SHA256 hash of metadata deterministically (BTreeMap is ordered)
@@ -46,6 +50,16 @@ impl SHA256Hashable for HashPointer {
     }
 }
 
+pub type RecordBody = Vec<u8>;
+
+impl SHA256Hashable for RecordBody {
+    fn hash(&self) -> Vec<u8> {
+        let mut hasher = Sha256::new();
+        hasher.update(self);
+        hasher.finalize().to_vec()
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct Record {
     pub header: RecordHeader,
@@ -59,6 +73,7 @@ pub struct RecordHeader {
     pub gdp_name: String,
     pub prev_ptr: Option<HashPointer>,
     pub hash_ptrs: Vec<HashPointer>,
+    pub data_hash: String,
 }
 
 impl SHA256Hashable for RecordHeader {
@@ -91,6 +106,12 @@ pub struct RecordHeartbeat {
 pub struct RecordContainer {
     pub head: Record,
     pub container: IndexMap<Vec<u8>, Record>,
+}
+
+impl Validate for RecordContainer {
+    fn valid(&self) -> bool {
+        true
+    }
 }
 
 /// Snapshot of the capsule persisted to the keyspace. This struct intentionally
