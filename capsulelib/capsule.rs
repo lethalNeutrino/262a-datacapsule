@@ -507,6 +507,13 @@ impl Capsule {
     }
 
     pub fn append(&mut self, hash_ptrs: Vec<HashPointer>, mut data: Vec<u8>) -> Result<Vec<u8>> {
+        log::debug!(
+            "Plaintext data: {:?}",
+            data.iter()
+                .map(|c| format!("{:02x}", c))
+                .collect::<String>()
+        );
+
         // Encrypt Data
         let iv: [u8; 16] = Self::derive_record_iv(&self.gdp_name(), self.last_seqno + 1);
         log::debug!(
@@ -557,13 +564,6 @@ impl Capsule {
             data: heartbeat_data,
             signature: heartbeat_signature,
         };
-
-        log::debug!(
-            "Plaintext data: {:?}",
-            data.iter()
-                .map(|c| format!("{:02x}", c))
-                .collect::<String>()
-        );
 
         let record = Record {
             header: header.clone(),
