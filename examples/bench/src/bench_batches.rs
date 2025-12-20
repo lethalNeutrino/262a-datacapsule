@@ -113,19 +113,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         connection.get(capsule_writer.local_capsule.gdp_name(), encryption_key)?;
 
     // Verify readback of appended records (local-cache path)
-    for hh in returned_hashes.iter() {
-        // NetworkCapsuleReader::read returns a `Record` for local-cache reads.
-        match capsule_reader.read(hh.clone()) {
-            Ok(rec) => {
-                // print seqno and a utf8 preview if possible
-                let data_preview = String::from_utf8_lossy(&rec.body);
-                info!("read seqno={} data={}", rec.header.seqno, data_preview);
-            }
-            Err(e) => {
-                eprintln!("failed to read back record: {}", e);
-            }
-        }
-    }
+    // for hh in returned_hashes.iter() {
+    //     // NetworkCapsuleReader::read returns a `Record` for local-cache reads.
+    //     match capsule_reader.read(hh.clone()) {
+    //         Ok(rec) => {
+    //             // print seqno and a utf8 preview if possible
+    //             let data_preview = String::from_utf8_lossy(&rec.body);
+    //             info!("read seqno={} data={}", rec.header.seqno, data_preview);
+    //         }
+    //         Err(e) => {
+    //             eprintln!("failed to read back record: {}", e);
+    //         }
+    //     }
+    // }
 
     // Run the local pool a bit (the examples in this repo often spin until externally terminated).
     let mut pool = LocalPool::new();

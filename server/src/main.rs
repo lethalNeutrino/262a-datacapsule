@@ -449,10 +449,11 @@ fn handle_read(
 
     // First, try to use a cached capsule (immutable borrow is sufficient for read).
     if let Some(cached) = local_capsules.borrow().get(&capsule_name) {
-        // `read` now returns a RecordContainer; forward it directly in the response.
-        let container = cached.read(header_hash.clone())?;
+        let record = cached.read(header_hash.clone())?;
         let response = DataCapsuleRequest::ReadResponse {
-            record_container: container,
+            record_container: RecordContainer {
+                records: vec![record],
+            },
         };
         reply_to.publish(&r2r::std_msgs::msg::String {
             data: serde_json::to_string(&response).unwrap(),
