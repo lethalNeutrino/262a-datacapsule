@@ -64,6 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut capsule_reader =
         connection.get(capsule_writer.local_capsule.gdp_name(), encryption_key)?;
 
+    debug!("header_hashes: {:?}", header_hashes);
     let mut records: Vec<Record> = Vec::new();
     for hash in header_hashes {
         // `NetworkCapsuleReader::read` returns a `Record` (for local-cache reads).

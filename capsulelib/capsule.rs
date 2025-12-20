@@ -704,6 +704,7 @@ impl Capsule {
 
             // If we've reached the requested header hash, stop traversing.
             if current_hash == target_hash {
+                log::debug!("reached target header hash");
                 break;
             }
 

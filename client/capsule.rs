@@ -71,42 +71,44 @@ impl NetworkCapsuleReader {
         };
 
         // Holder to receive the Record from the spawned task.
-        // let record_holder: Rc<RefCell<Option<Record>>> = Rc::new(RefCell::new(None));
-        // let holder_for_task = Rc::clone(&record_holder);
+        let record_holder: Rc<RefCell<Option<Record>>> = Rc::new(RefCell::new(None));
+        let holder_for_task = Rc::clone(&record_holder);
 
         // Take ownership of the subscriber so the spawned local task can drive it.
         // Replace it with an empty placeholder so the Topic stays valid.
-        // let real_sub = std::mem::replace(
-        //     &mut self.connection.subscriber,
-        //     Box::new(futures::stream::empty::<r2r::std_msgs::msg::String>()),
-        // );
+        let real_sub = std::mem::replace(
+            &mut self.connection.subscriber,
+            Box::new(futures::stream::empty::<r2r::std_msgs::msg::String>()),
+        );
 
-        // // Create a local pool to run the listener task.
-        // let mut pool = LocalPool::new();
-        // let spawner = pool.spawner();
+        // Create a local pool to run the listener task.
+        let mut pool = LocalPool::new();
+        let spawner = pool.spawner();
 
-        // // Spawn a local task that listens for ReadResponse messages and stores the Record.
-        // spawner.spawn_local(async move {
-        //     real_sub
-        //         .for_each(move |msg| {
-        //             match serde_json::from_str::<DataCapsuleRequest>(&msg.data) {
-        //                 Ok(DataCapsuleRequest::ReadResponse { records }) => {
-        //                     // For now take the first record from the container (future: handle multiple)
-        //                     if let Some(rec) = records.into_iter().next() {
-        //                         *holder_for_task.borrow_mut() = Some(rec);
-        //                     }
-        //                 }
-        //                 Ok(_) => {
-        //                     // ignore other messages
-        //                 }
-        //                 Err(e) => {
-        //                     println!("Failed to parse message in read listener: {}", e);
-        //                 }
-        //             };
-        //             futures::future::ready(())
-        //         })
-        //         .await;
-        // })?;
+        // Spawn a local task that listens for ReadResponse messages and stores the Record.
+        spawner.spawn_local(async move {
+            real_sub
+                .for_each(move |msg| {
+                    match serde_json::from_str::<DataCapsuleRequest>(&msg.data) {
+                        Ok(DataCapsuleRequest::ReadResponse { record_container }) => {
+                            // For now take the first record from the container (future: handle multiple)
+                            *holder_for_task.borrow_mut() =
+                                Some(record_container.records[0].clone());
+                            // if let Some(rec) = records.into_iter().next() {
+                            //     *holder_for_task.borrow_mut() = Some(rec);
+                            // }
+                        }
+                        Ok(_) => {
+                            // ignore other messages
+                        }
+                        Err(e) => {
+                            println!("Failed to parse message in read listener: {}", e);
+                        }
+                    };
+                    futures::future::ready(())
+                })
+                .await;
+        })?;
 
         // Publish the request.
         self.connection
